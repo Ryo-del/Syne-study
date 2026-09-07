@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   startTransition,
   useDeferredValue,
   useEffect,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import {
   blockPeer,
+  clearChatHistory,
   deleteContact,
   getApiBase,
   listenEvents,
@@ -22,6 +24,7 @@ import {
   sendMessage,
   unblockPeer,
 } from "./lib/api";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Image as TauriImage } from "@tauri-apps/api/image";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import blackIcon from "../src-tauri/icons/black.jpeg";
@@ -58,14 +61,16 @@ const EMPTY_SNAPSHOT: Snapshot = {
 const EMOJI_OPTIONS = ["🙂", "😎", "🤝", "🛰️", "🌿", "🔥", "🦊", "🐼", "😇", "🌙"];
 type SidebarView = "chats" | "contacts" | "network" | "blocked";
 type ThemePreference = "system" | "light" | "dark";
+type NotificationSound = "chime" | "pulse" | "soft" | "none";
+type AppLanguage = "ru" | "en" | "fr" | "de";
 const SETTINGS_SECTIONS = [
-  { id: "notifications", label: "🔔 Notifications" },
-  { id: "language", label: "🌐 Language" },
-  { id: "appearance", label: "🎨 Appearance" },
-  { id: "delete-history", label: "🗑️ Delete chat history" },
-  { id: "sync-devices", label: "📱 Sync devices" },
-  { id: "device-key", label: "🔐 Device key" },
-  { id: "system-settings", label: "⚙️ System settings" },
+  { id: "notifications", icon: "🔔", labelKey: "settings.notifications" },
+  { id: "language", icon: "🌐", labelKey: "settings.language" },
+  { id: "appearance", icon: "🎨", labelKey: "settings.appearance" },
+  { id: "delete-history", icon: "🗑️", labelKey: "settings.deleteHistory" },
+  { id: "sync-devices", icon: "📱", labelKey: "settings.syncDevices" },
+  { id: "device-key", icon: "🔐", labelKey: "settings.deviceKey" },
+  { id: "system-settings", icon: "⚙️", labelKey: "settings.systemSettings" },
 ] as const;
 type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
 const THEME_OPTIONS: Array<{ id: ThemePreference; label: string }> = [
@@ -82,6 +87,153 @@ const APP_ICON_OPTIONS = [
   { id: "black", label: "Black", src: blackIcon },
 ] as const;
 type AppIconId = (typeof APP_ICON_OPTIONS)[number]["id"];
+const NOTIFICATION_SOUND_OPTIONS: Array<{ id: NotificationSound; label: string }> = [
+  { id: "chime", label: "Chime" },
+  { id: "pulse", label: "Pulse" },
+  { id: "soft", label: "Soft" },
+  { id: "none", label: "None" },
+];
+const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string }> = [
+  { id: "ru", label: "Русский" },
+  { id: "en", label: "Английский" },
+  { id: "fr", label: "Французский" },
+  { id: "de", label: "Немецкий" },
+];
+const APP_ICON_SIZE = 1024;
+const APP_ICON_VISIBLE_RATIO = 0.86;
+const APP_ICON_CORNER_RADIUS_RATIO = 0.223;
+const DELETE_HISTORY_HOLD_MS = 3000;
+
+const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
+  ru: {
+    "settings.title": "Настройки",
+    "settings.preferences": "Параметры",
+    "settings.back": "Назад",
+    "settings.close": "Закрыть",
+    "settings.notifications": "Уведомления",
+    "settings.language": "Язык",
+    "settings.appearance": "Внешний вид",
+    "settings.deleteHistory": "Удалить историю чата",
+    "settings.syncDevices": "Синхронизация устройств",
+    "settings.deviceKey": "Ключ устройства",
+    "settings.systemSettings": "Системные настройки",
+    "notifications.enabled": "Уведомления",
+    "notifications.preview": "Предпросмотр",
+    "notifications.sound": "Звук",
+    "notifications.enabledMeta": "Показывать уведомления о новых сообщениях",
+    "notifications.previewMeta": "Показывать текст сообщения в уведомлении",
+    "language.current": "Текущий язык",
+    "appearance.theme": "Тема",
+    "appearance.icon": "Иконка",
+    "appearance.saved": "Сохранено локально для этого устройства",
+    "deleteHistory.title": "Удалить всю историю",
+    "deleteHistory.description": "Будут удалены все переписки и сообщения на этом устройстве.",
+    "deleteHistory.openConfirm": "Удалить всю историю",
+    "deleteHistory.confirmTitle": "Вы точно хотите удалить всю историю переписок?",
+    "deleteHistory.confirmDescription": "Это действие нельзя отменить. Удерживайте кнопку подтверждения 3 секунды.",
+    "deleteHistory.cancel": "Отмена",
+    "deleteHistory.confirm": "Подтвердить",
+    "deleteHistory.hold": "Удерживайте...",
+    "deleteHistory.deleted": "История переписок удалена",
+    "deleteHistory.failed": "Не удалось удалить историю",
+  },
+  en: {
+    "settings.title": "Settings",
+    "settings.preferences": "Preferences",
+    "settings.back": "Back",
+    "settings.close": "Close",
+    "settings.notifications": "Notifications",
+    "settings.language": "Language",
+    "settings.appearance": "Appearance",
+    "settings.deleteHistory": "Delete chat history",
+    "settings.syncDevices": "Sync devices",
+    "settings.deviceKey": "Device key",
+    "settings.systemSettings": "System settings",
+    "notifications.enabled": "Notifications",
+    "notifications.preview": "Preview",
+    "notifications.sound": "Sound",
+    "notifications.enabledMeta": "Show notifications for new messages",
+    "notifications.previewMeta": "Show message text in notifications",
+    "language.current": "Current language",
+    "appearance.theme": "Theme",
+    "appearance.icon": "Icon",
+    "appearance.saved": "Saved locally for this device",
+    "deleteHistory.title": "Delete all history",
+    "deleteHistory.description": "All chats and messages on this device will be removed.",
+    "deleteHistory.openConfirm": "Delete all history",
+    "deleteHistory.confirmTitle": "Are you sure you want to delete all chat history?",
+    "deleteHistory.confirmDescription": "This cannot be undone. Hold confirm for 3 seconds.",
+    "deleteHistory.cancel": "Cancel",
+    "deleteHistory.confirm": "Confirm",
+    "deleteHistory.hold": "Keep holding...",
+    "deleteHistory.deleted": "Chat history deleted",
+    "deleteHistory.failed": "Failed to delete history",
+  },
+  fr: {
+    "settings.title": "Paramètres",
+    "settings.preferences": "Préférences",
+    "settings.back": "Retour",
+    "settings.close": "Fermer",
+    "settings.notifications": "Notifications",
+    "settings.language": "Langue",
+    "settings.appearance": "Apparence",
+    "settings.deleteHistory": "Supprimer l'historique",
+    "settings.syncDevices": "Synchroniser les appareils",
+    "settings.deviceKey": "Clé de l'appareil",
+    "settings.systemSettings": "Paramètres système",
+    "notifications.enabled": "Notifications",
+    "notifications.preview": "Aperçu",
+    "notifications.sound": "Son",
+    "notifications.enabledMeta": "Afficher les notifications des nouveaux messages",
+    "notifications.previewMeta": "Afficher le texte du message",
+    "language.current": "Langue actuelle",
+    "appearance.theme": "Thème",
+    "appearance.icon": "Icône",
+    "appearance.saved": "Enregistré localement sur cet appareil",
+    "deleteHistory.title": "Supprimer tout l'historique",
+    "deleteHistory.description": "Toutes les conversations et messages de cet appareil seront supprimés.",
+    "deleteHistory.openConfirm": "Supprimer tout l'historique",
+    "deleteHistory.confirmTitle": "Voulez-vous vraiment supprimer tout l'historique ?",
+    "deleteHistory.confirmDescription": "Cette action est irréversible. Maintenez confirmer pendant 3 secondes.",
+    "deleteHistory.cancel": "Annuler",
+    "deleteHistory.confirm": "Confirmer",
+    "deleteHistory.hold": "Maintenez...",
+    "deleteHistory.deleted": "Historique supprimé",
+    "deleteHistory.failed": "Impossible de supprimer l'historique",
+  },
+  de: {
+    "settings.title": "Einstellungen",
+    "settings.preferences": "Optionen",
+    "settings.back": "Zurück",
+    "settings.close": "Schließen",
+    "settings.notifications": "Benachrichtigungen",
+    "settings.language": "Sprache",
+    "settings.appearance": "Darstellung",
+    "settings.deleteHistory": "Chatverlauf löschen",
+    "settings.syncDevices": "Geräte synchronisieren",
+    "settings.deviceKey": "Geräteschlüssel",
+    "settings.systemSettings": "Systemeinstellungen",
+    "notifications.enabled": "Benachrichtigungen",
+    "notifications.preview": "Vorschau",
+    "notifications.sound": "Ton",
+    "notifications.enabledMeta": "Benachrichtigungen für neue Nachrichten anzeigen",
+    "notifications.previewMeta": "Nachrichtentext in Benachrichtigungen anzeigen",
+    "language.current": "Aktuelle Sprache",
+    "appearance.theme": "Design",
+    "appearance.icon": "Icon",
+    "appearance.saved": "Lokal auf diesem Gerät gespeichert",
+    "deleteHistory.title": "Gesamten Verlauf löschen",
+    "deleteHistory.description": "Alle Chats und Nachrichten auf diesem Gerät werden gelöscht.",
+    "deleteHistory.openConfirm": "Gesamten Verlauf löschen",
+    "deleteHistory.confirmTitle": "Möchten Sie wirklich den gesamten Chatverlauf löschen?",
+    "deleteHistory.confirmDescription": "Dies kann nicht rückgängig gemacht werden. Halten Sie Bestätigen 3 Sekunden lang.",
+    "deleteHistory.cancel": "Abbrechen",
+    "deleteHistory.confirm": "Bestätigen",
+    "deleteHistory.hold": "Gedrückt halten...",
+    "deleteHistory.deleted": "Chatverlauf gelöscht",
+    "deleteHistory.failed": "Verlauf konnte nicht gelöscht werden",
+  },
+};
 
 function formatTime(value: number) {
   if (!value) {
@@ -136,11 +288,7 @@ function joinAddress(ip?: string, port?: string) {
   return `${cleanIP}:${cleanPort}`;
 }
 
-async function buildWindowIcon(src: string) {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return null;
-  }
-
+async function loadIconImage(src: string) {
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const nextImage = new Image();
     nextImage.onload = () => resolve(nextImage);
@@ -154,18 +302,73 @@ async function buildWindowIcon(src: string) {
     throw new Error("Selected icon has invalid dimensions");
   }
 
+  return { image, width, height };
+}
+
+function drawRoundedIconCanvas(image: HTMLImageElement, width: number, height: number) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return null;
+  }
+
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = APP_ICON_SIZE;
+  canvas.height = APP_ICON_SIZE;
 
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     throw new Error("Canvas 2D context is unavailable");
   }
 
-  ctx.drawImage(image, 0, 0, width, height);
-  const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data);
-  return TauriImage.new(rgba, width, height);
+  const visibleSize = APP_ICON_SIZE * APP_ICON_VISIBLE_RATIO;
+  const offset = (APP_ICON_SIZE - visibleSize) / 2;
+  const radius = visibleSize * APP_ICON_CORNER_RADIUS_RATIO;
+  const scale = Math.max(visibleSize / width, visibleSize / height);
+  const drawWidth = width * scale;
+  const drawHeight = height * scale;
+  const drawX = offset + (visibleSize - drawWidth) / 2;
+  const drawY = offset + (visibleSize - drawHeight) / 2;
+
+  ctx.beginPath();
+  ctx.roundRect(offset, offset, visibleSize, visibleSize, radius);
+  ctx.clip();
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  return canvas;
+}
+
+async function buildWindowIcon(src: string) {
+  const { image, width, height } = await loadIconImage(src);
+  const canvas = drawRoundedIconCanvas(image, width, height);
+  if (!canvas) {
+    return null;
+  }
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvas 2D context is unavailable");
+  }
+
+  const rgba = new Uint8Array(ctx.getImageData(0, 0, APP_ICON_SIZE, APP_ICON_SIZE).data);
+  return TauriImage.new(rgba, APP_ICON_SIZE, APP_ICON_SIZE);
+}
+
+async function loadRoundedIconBytes(src: string) {
+  const { image, width, height } = await loadIconImage(src);
+  const canvas = drawRoundedIconCanvas(image, width, height);
+  if (!canvas) {
+    return null;
+  }
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) {
+        resolve(nextBlob);
+      } else {
+        reject(new Error("Failed to encode rounded app icon"));
+      }
+    }, "image/png");
+  });
+
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 function buildEmptyContact(overrides?: Partial<Contact>): Contact {
@@ -302,6 +505,24 @@ export default function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     readStorage("syne.theme_preference", "system"),
   );
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() =>
+    readStorage("syne.notifications_enabled", true),
+  );
+  const [notificationPreview, setNotificationPreview] = useState(() =>
+    readStorage("syne.notification_preview", true),
+  );
+  const [notificationSound, setNotificationSound] = useState<NotificationSound>(() => {
+    const stored = readStorage<string>("syne.notification_sound", "chime");
+    return NOTIFICATION_SOUND_OPTIONS.some((item) => item.id === stored)
+      ? stored as NotificationSound
+      : "chime";
+  });
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => {
+    const stored = readStorage<string>("syne.language", "ru");
+    return LANGUAGE_OPTIONS.some((item) => item.id === stored)
+      ? stored as AppLanguage
+      : "ru";
+  });
   const [selectedAppIcon, setSelectedAppIcon] = useState<AppIconId>(() => {
     const stored = readStorage<string>("syne.app_icon", "blue");
     return APP_ICON_OPTIONS.some((item) => item.id === stored)
@@ -319,8 +540,14 @@ export default function App() {
   const [peerEmojis, setPeerEmojis] = useState<Record<string, string>>(() =>
     readStorage("syne.peer_emojis", {}),
   );
+  const [showDeleteHistoryConfirm, setShowDeleteHistoryConfirm] = useState(false);
+  const [deleteHoldProgress, setDeleteHoldProgress] = useState(0);
+  const [deletingHistory, setDeletingHistory] = useState(false);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollBehaviorRef = useRef<ScrollBehavior | null>(null);
+  const deleteHoldTimerRef = useRef<number | null>(null);
+  const deleteHoldFrameRef = useRef<number | null>(null);
+  const deleteHoldStartedAtRef = useRef(0);
   const deferredQuery = useDeferredValue(query);
   const visibleChats = useMemo(
     () => snapshot.chats.filter((item) => !hiddenChatIds.includes(item.chat_id)),
@@ -342,6 +569,7 @@ export default function App() {
   const activeSettingsItem = activeSettingsSection
     ? SETTINGS_SECTIONS.find((item) => item.id === activeSettingsSection) ?? null
     : null;
+  const t = (key: string) => TRANSLATIONS[appLanguage][key] ?? TRANSLATIONS.en[key] ?? key;
   const resolvedTheme = themePreference === "system" ? systemTheme : themePreference;
   const currentAppIcon = APP_ICON_OPTIONS.find((item) => item.id === selectedAppIcon) ?? APP_ICON_OPTIONS[0];
 
@@ -597,7 +825,8 @@ export default function App() {
           event.type === "contact_updated" ||
           event.type === "contact_deleted" ||
           event.type === "peer_blocked" ||
-          event.type === "peer_unblocked"
+          event.type === "peer_unblocked" ||
+          event.type === "chat_history_deleted"
         ) {
           void refreshBootstrap();
         }
@@ -646,8 +875,29 @@ export default function App() {
   }, [themePreference]);
 
   useEffect(() => {
+    writeStorage("syne.notifications_enabled", notificationsEnabled);
+  }, [notificationsEnabled]);
+
+  useEffect(() => {
+    writeStorage("syne.notification_preview", notificationPreview);
+  }, [notificationPreview]);
+
+  useEffect(() => {
+    writeStorage("syne.notification_sound", notificationSound);
+  }, [notificationSound]);
+
+  useEffect(() => {
+    writeStorage("syne.language", appLanguage);
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = appLanguage;
+    }
+  }, [appLanguage]);
+
+  useEffect(() => {
     writeStorage("syne.app_icon", selectedAppIcon);
   }, [selectedAppIcon]);
+
+  useEffect(() => () => stopDeleteHistoryHold(), []);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -673,13 +923,23 @@ export default function App() {
   }, [currentAppIcon.src]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    if (typeof window === "undefined" || !isTauri()) {
       return;
     }
 
     let cancelled = false;
 
     async function applyWindowIcon() {
+      try {
+        const iconBytes = await loadRoundedIconBytes(currentAppIcon.src);
+        if (!iconBytes || cancelled) {
+          return;
+        }
+        await invoke("set_app_icon", { iconBytes: Array.from(iconBytes) });
+      } catch (err) {
+        console.warn("Failed to apply app icon", err);
+      }
+
       try {
         const icon = await buildWindowIcon(currentAppIcon.src);
         if (!icon || cancelled) {
@@ -875,7 +1135,64 @@ export default function App() {
     setShowSettings(true);
   }
 
+  function stopDeleteHistoryHold() {
+    if (deleteHoldTimerRef.current !== null) {
+      window.clearTimeout(deleteHoldTimerRef.current);
+      deleteHoldTimerRef.current = null;
+    }
+    if (deleteHoldFrameRef.current !== null) {
+      window.cancelAnimationFrame(deleteHoldFrameRef.current);
+      deleteHoldFrameRef.current = null;
+    }
+    deleteHoldStartedAtRef.current = 0;
+    setDeleteHoldProgress(0);
+  }
+
+  async function confirmDeleteHistory() {
+    stopDeleteHistoryHold();
+    try {
+      setDeletingHistory(true);
+      setError("");
+      await clearChatHistory();
+      startTransition(() => {
+        setMessages({});
+        setSnapshot((current) => ({ ...current, chats: [] }));
+        setSelectedChatId("");
+        setHiddenChatIds([]);
+      });
+      writeStorage("syne.hidden_chat_ids", []);
+      setShowDeleteHistoryConfirm(false);
+      setError(t("deleteHistory.deleted"));
+      await refreshBootstrap(false);
+    } catch (err) {
+      setError(describeError(err, t("deleteHistory.failed")));
+    } finally {
+      setDeletingHistory(false);
+    }
+  }
+
+  function startDeleteHistoryHold() {
+    if (deletingHistory || deleteHoldTimerRef.current !== null) {
+      return;
+    }
+    deleteHoldStartedAtRef.current = window.performance.now();
+    const updateProgress = () => {
+      const elapsed = window.performance.now() - deleteHoldStartedAtRef.current;
+      setDeleteHoldProgress(Math.min(1, elapsed / DELETE_HISTORY_HOLD_MS));
+      if (elapsed < DELETE_HISTORY_HOLD_MS) {
+        deleteHoldFrameRef.current = window.requestAnimationFrame(updateProgress);
+      }
+    };
+    updateProgress();
+    deleteHoldTimerRef.current = window.setTimeout(() => {
+      deleteHoldTimerRef.current = null;
+      void confirmDeleteHistory();
+    }, DELETE_HISTORY_HOLD_MS);
+  }
+
   function closeSettings() {
+    stopDeleteHistoryHold();
+    setShowDeleteHistoryConfirm(false);
     setShowSettings(false);
     setActiveSettingsSection(null);
   }
@@ -964,22 +1281,6 @@ export default function App() {
       <div className="app-shell">
         {/* ─── Icon Rail ─── */}
         <nav className="icon-rail">
-          <button
-            type="button"
-            className="icon-rail-brand"
-            onClick={() => {
-              setShowSettings(true);
-              setActiveSettingsSection("appearance");
-            }}
-            title="Appearance"
-          >
-            <img
-              src={currentAppIcon.src}
-              alt={`${currentAppIcon.label} app icon`}
-              className="icon-rail-brand-image"
-            />
-          </button>
-
           <div className="emoji-anchor">
             <button
               type="button"
@@ -1443,24 +1744,93 @@ export default function App() {
                     className="ghost-tiny"
                     onClick={() => setActiveSettingsSection(null)}
                   >
-                    Back
+                    {t("settings.back")}
                   </button>
                 ) : (
-                  <span className="settings-popover-kicker">Preferences</span>
+                  <span className="settings-popover-kicker">{t("settings.preferences")}</span>
                 )}
-                <h2 id="settings-title">{activeSettingsItem?.label ?? "Settings"}</h2>
+                <h2 id="settings-title">
+                  {activeSettingsItem
+                    ? `${activeSettingsItem.icon} ${t(activeSettingsItem.labelKey)}`
+                    : t("settings.title")}
+                </h2>
               </div>
               <button type="button" className="ghost-tiny" onClick={closeSettings}>
-                Close
+                {t("settings.close")}
               </button>
             </div>
 
             {activeSettingsItem ? (
-              activeSettingsSection === "appearance" ? (
+              activeSettingsSection === "notifications" ? (
+                <div className="settings-panel">
+                  <section className="settings-section-card">
+                    <label className="settings-toggle-row">
+                      <span>
+                        <strong>{t("notifications.enabled")}</strong>
+                        <small>{t("notifications.enabledMeta")}</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={notificationsEnabled}
+                        onChange={(event) => setNotificationsEnabled(event.target.checked)}
+                      />
+                    </label>
+                    <label className="settings-toggle-row">
+                      <span>
+                        <strong>{t("notifications.preview")}</strong>
+                        <small>{t("notifications.previewMeta")}</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={notificationPreview}
+                        disabled={!notificationsEnabled}
+                        onChange={(event) => setNotificationPreview(event.target.checked)}
+                      />
+                    </label>
+                    <label className="settings-field">
+                      <span>{t("notifications.sound")}</span>
+                      <select
+                        value={notificationSound}
+                        disabled={!notificationsEnabled}
+                        onChange={(event) => setNotificationSound(event.target.value as NotificationSound)}
+                      >
+                        {NOTIFICATION_SOUND_OPTIONS.map((sound) => (
+                          <option key={sound.id} value={sound.id}>
+                            {sound.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </section>
+                </div>
+              ) : activeSettingsSection === "language" ? (
+                <div className="settings-panel">
+                  <section className="settings-section-card">
+                    <div className="appearance-section-head">
+                      <span className="appearance-section-label">{t("language.current")}</span>
+                      <span className="appearance-section-meta">
+                        {LANGUAGE_OPTIONS.find((item) => item.id === appLanguage)?.label}
+                      </span>
+                    </div>
+                    <div className="language-grid">
+                      {LANGUAGE_OPTIONS.map((language) => (
+                        <button
+                          key={language.id}
+                          type="button"
+                          className={`appearance-choice ${appLanguage === language.id ? "active" : ""}`}
+                          onClick={() => setAppLanguage(language.id)}
+                        >
+                          {language.label}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              ) : activeSettingsSection === "appearance" ? (
                 <div className="appearance-panel">
                   <section className="appearance-section">
                     <div className="appearance-section-head">
-                      <span className="appearance-section-label">Theme</span>
+                      <span className="appearance-section-label">{t("appearance.theme")}</span>
                       <span className="appearance-section-meta">{resolvedTheme}</span>
                     </div>
                     <div className="appearance-theme-grid">
@@ -1479,14 +1849,14 @@ export default function App() {
 
                   <section className="appearance-section">
                     <div className="appearance-section-head">
-                      <span className="appearance-section-label">Icon</span>
+                      <span className="appearance-section-label">{t("appearance.icon")}</span>
                       <span className="appearance-section-meta">{currentAppIcon.label}</span>
                     </div>
                     <div className="appearance-icon-current">
                       <img src={currentAppIcon.src} alt={currentAppIcon.label} className="appearance-icon-current-image" />
                       <div className="appearance-icon-current-copy">
                         <strong>{currentAppIcon.label}</strong>
-                        <span>Saved locally for this device</span>
+                        <span>{t("appearance.saved")}</span>
                       </div>
                     </div>
                     <div className="appearance-icon-grid">
@@ -1504,6 +1874,22 @@ export default function App() {
                     </div>
                   </section>
                 </div>
+              ) : activeSettingsSection === "delete-history" ? (
+                <div className="settings-panel">
+                  <section className="settings-section-card danger-settings-card">
+                    <div className="settings-danger-copy">
+                      <strong>{t("deleteHistory.title")}</strong>
+                      <span>{t("deleteHistory.description")}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="danger-wide-btn"
+                      onClick={() => setShowDeleteHistoryConfirm(true)}
+                    >
+                      {t("deleteHistory.openConfirm")}
+                    </button>
+                  </section>
+                </div>
               ) : (
                 <div className="settings-panel-empty" />
               )
@@ -1516,13 +1902,46 @@ export default function App() {
                     className="settings-menu-item"
                     onClick={() => setActiveSettingsSection(section.id)}
                   >
-                    <span>{section.label}</span>
+                    <span>{section.icon} {t(section.labelKey)}</span>
                     <span className="settings-menu-arrow" aria-hidden="true">›</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
+          {showDeleteHistoryConfirm ? (
+            <div className="confirm-dialog" role="alertdialog" aria-modal="true">
+              <div className="confirm-dialog-copy">
+                <strong>{t("deleteHistory.confirmTitle")}</strong>
+                <span>{t("deleteHistory.confirmDescription")}</span>
+              </div>
+              <div className="confirm-dialog-actions">
+                <button
+                  type="button"
+                  className="ghost-tiny"
+                  onClick={() => {
+                    stopDeleteHistoryHold();
+                    setShowDeleteHistoryConfirm(false);
+                  }}
+                  disabled={deletingHistory}
+                >
+                  {t("deleteHistory.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="hold-confirm-btn"
+                  style={{ "--hold-progress": deleteHoldProgress } as CSSProperties}
+                  onPointerDown={startDeleteHistoryHold}
+                  onPointerUp={stopDeleteHistoryHold}
+                  onPointerLeave={stopDeleteHistoryHold}
+                  onPointerCancel={stopDeleteHistoryHold}
+                  disabled={deletingHistory}
+                >
+                  <span>{deleteHoldProgress > 0 ? t("deleteHistory.hold") : t("deleteHistory.confirm")}</span>
+                </button>
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
       {/* ─── Contact Popover (modal) ─── */}

@@ -2,7 +2,6 @@ package p2p
 
 import (
 	corecrypto "Syne/core/crypto"
-	coreprotocol "Syne/core/protocol"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	coreprotocol "github.com/Ryo-del/Syne-protocol"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"

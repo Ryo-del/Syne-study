@@ -1,10 +1,11 @@
 package history
 
 import (
-	"Syne/core/protocol"
 	"os"
 	"testing"
 	"time"
+
+	protocol "github.com/Ryo-del/Syne-protocol"
 )
 
 func withTempCWD(t *testing.T) {

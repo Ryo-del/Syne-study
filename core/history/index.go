@@ -99,6 +99,22 @@ func TouchChat(record ChatRecord) error {
 	return err
 }
 
+func ClearChatHistory() error {
+	if err := ensureDB(); err != nil {
+		return err
+	}
+	database, err := getDB()
+	if err != nil {
+		return err
+	}
+	_, err = database.Exec(`
+		DELETE FROM messages;
+		DELETE FROM chats;
+		DELETE FROM outbox;
+	`)
+	return err
+}
+
 func UpsertPeerAlias(peerID, name string) error {
 	peerID = strings.TrimSpace(peerID)
 	name = strings.TrimSpace(name)

@@ -64,6 +64,7 @@ func main() {
 	mux.HandleFunc("/api/events", srv.handleEvents)
 	mux.HandleFunc("/api/chats/open", srv.handleOpenChat)
 	mux.HandleFunc("/api/chats/read", srv.handleReadChat)
+	mux.HandleFunc("/api/chats/history", srv.handleClearChatHistory)
 	mux.HandleFunc("/api/chats/", srv.handleChatRoutes)
 	mux.HandleFunc("/api/messages", srv.handleSendMessage)
 	mux.HandleFunc("/api/invite", srv.handleInvite)
@@ -230,6 +231,18 @@ func (s *server) handleReadChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.service.MarkChatRead(req.ChatID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleClearChatHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.service.ClearChatHistory(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

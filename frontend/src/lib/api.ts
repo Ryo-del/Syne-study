@@ -126,6 +126,12 @@ export function markChatRead(chatId: string) {
   });
 }
 
+export function clearChatHistory() {
+  return request<{ ok: true }>("/api/chats/history", {
+    method: "DELETE",
+  });
+}
+
 export function sendMessage(payload: {
   chat_id: string;
   target_id: string;

@@ -4,7 +4,6 @@ import (
 	corechat "Syne/core/chat"
 	corecrypto "Syne/core/crypto"
 	"Syne/core/history"
-	"Syne/core/protocol"
 	p2ptransport "Syne/core/transport/p2p"
 	"context"
 	"errors"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	protocol "github.com/Ryo-del/Syne-protocol"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -248,6 +249,20 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 		})
 	}
 	return messages, nil
+}
+
+func (s *Service) ClearChatHistory() error {
+	if err := history.ClearChatHistory(); err != nil {
+		return err
+	}
+	s.stateMu.Lock()
+	s.unread = make(map[string]int)
+	s.stateMu.Unlock()
+	s.emit(Event{
+		Type:      "chat_history_deleted",
+		Timestamp: time.Now().UnixMilli(),
+	})
+	return nil
 }
 
 func (s *Service) OpenPrivateChat(peerID, peerAddr, name string) (ChatSummary, error) {

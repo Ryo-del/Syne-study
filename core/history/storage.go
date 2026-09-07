@@ -1,11 +1,12 @@
 package history
 
 import (
-	"Syne/core/protocol"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"sync"
+
+	protocol "github.com/Ryo-del/Syne-protocol"
 
 	_ "modernc.org/sqlite"
 )

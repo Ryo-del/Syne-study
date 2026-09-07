@@ -977,6 +977,175 @@ button {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
 }
 
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-section-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--bg-secondary);
+}
+
+.settings-toggle-row span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-toggle-row strong,
+.settings-danger-copy strong {
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.settings-toggle-row small,
+.settings-danger-copy span {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.settings-toggle-row input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-field select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--bg-secondary);
+  color: var(--ink);
+  font: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.language-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.danger-settings-card {
+  border-color: rgba(255, 93, 93, 0.35);
+}
+
+.settings-danger-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.danger-wide-btn,
+.hold-confirm-btn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 93, 93, 0.45);
+  background: rgba(255, 93, 93, 0.12);
+  color: #ff8a8a;
+  font-weight: 700;
+}
+
+.danger-wide-btn:hover,
+.hold-confirm-btn:hover {
+  background: rgba(255, 93, 93, 0.18);
+}
+
+.confirm-dialog {
+  position: fixed;
+  z-index: 1001;
+  left: 50%;
+  top: 50%;
+  width: min(88vw, 420px);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-secondary);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
+}
+
+.confirm-dialog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.confirm-dialog-copy strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.confirm-dialog-copy span {
+  color: var(--ink-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.confirm-dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+}
+
+.hold-confirm-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.hold-confirm-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: scaleX(var(--hold-progress, 0));
+  transform-origin: left center;
+  background: rgba(255, 93, 93, 0.28);
+  transition: transform 80ms linear;
+}
+
+.hold-confirm-btn span {
+  position: relative;
+  z-index: 1;
+}
+
 .appearance-panel {
   display: flex;
   flex-direction: column;
