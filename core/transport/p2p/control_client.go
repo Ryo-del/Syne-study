@@ -39,6 +39,7 @@ func (n *Node) ConnectToServer(ctx context.Context, serverAddr string) (*protoco
 		ProtocolVersion: protocol.ProtocolVersion,
 		Timestamp:       time.Now().UnixMilli(),
 	}
+
 	data, err := protocol.MarshalHello(hello)
 	if err != nil {
 		return nil, err
@@ -47,6 +48,7 @@ func (n *Node) ConnectToServer(ctx context.Context, serverAddr string) (*protoco
 	if err != nil {
 		return nil, err
 	}
+	stream.CloseWrite()
 	_ = stream.SetReadDeadline(time.Now().Add(protocol.DefaultReadDeadline))
 	respData, err := io.ReadAll(io.LimitReader(stream, protocol.DefaultReadLimit))
 	if err != nil {
