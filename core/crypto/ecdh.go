@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
@@ -85,7 +87,7 @@ func DeriveChatKey(localPriv *ecdh.PrivateKey, remotePub *ecdh.PublicKey, chatID
 	// - salt = SHA256(chatID)
 	// - info = "syne-chat-v1"
 	salt := sha256.Sum256([]byte(chatID))
-	r := hkdfSHA256(secret, salt[:], []byte("syne-chat-v1"))
+	r := hkdf.New(sha256.New, secret, salt[:], []byte("syne-chat-v1"))
 
 	key := make([]byte, SharedKeySize)
 	if _, err := io.ReadFull(r, key); err != nil {
@@ -93,4 +95,3 @@ func DeriveChatKey(localPriv *ecdh.PrivateKey, remotePub *ecdh.PublicKey, chatID
 	}
 	return key, nil
 }
-
