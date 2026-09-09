@@ -4,10 +4,17 @@ import (
 	"crypto/rand"
 	"fmt"
 
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 const SharedKeySize = chacha20poly1305.KeySize
+
+const (
+	argonTime    = 1
+	argonMemory  = 19 * 1024
+	argonThreads = 1
+)
 
 type KeyPair struct {
 	PublicKey  []byte
@@ -53,4 +60,17 @@ func UnwrapKey(wrapped, newX []byte) ([]byte, error) {
 	}
 
 	return key, nil
+}
+func DeriveLoginKey(password string, salt []byte) []byte {
+	return argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, SharedKeySize)
+}
+
+func DerivePasswordHash(password string, salt []byte) []byte {
+	return argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, 32)
+}
+
+func GenerateSalt() []byte {
+	salt := make([]byte, 16)
+	rand.Read(salt)
+	return salt
 }
