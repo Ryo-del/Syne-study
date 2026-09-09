@@ -15,11 +15,11 @@ type KeyPair struct {
 }
 
 func WarpKey(key, newX []byte) ([]byte, error) {
-	aead, err := chacha20poly1305.New(newX)
+	aead, err := chacha20poly1305.NewX(newX)
 	if err != nil {
 		return nil, err
 	}
-	nonce := make([]byte, chacha20poly1305.NonceSize)
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
