@@ -34,12 +34,12 @@ func WrapKey(key, newX []byte) ([]byte, error) {
 }
 
 func UnwrapKey(wrapped, newX []byte) ([]byte, error) {
-	aead, err := chacha20poly1305.New(newX)
+	aead, err := chacha20poly1305.NewX(newX)
 	if err != nil {
 		return nil, err
 	}
 
-	nonceSize := chacha20poly1305.NonceSize
+	nonceSize := chacha20poly1305.NonceSizeX
 	if len(wrapped) < nonceSize {
 		return nil, fmt.Errorf("wrapped key is too short")
 	}
