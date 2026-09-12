@@ -55,20 +55,20 @@ func (n *Node) ConnectToServer(ctx context.Context, serverAddr string) (*protoco
 		return nil, err
 	}
 
-	controlType, err := protocol.PeekControlType(respData)
+	controlType, err := protocol.PeekType(respData)
 	if err != nil {
 		return nil, err
 	}
 
 	switch controlType {
 	case protocol.ControlTypeWelcome:
-		welcome, err := protocol.UnmarshalWelcome(respData)
+		welcome, err := protocol.UnmarshalJSON[protocol.Welcome](respData)
 		if err != nil {
 			return nil, err
 		}
 		return &welcome, nil
 	case protocol.ControlTypeReject:
-		reject, err := protocol.UnmarshalReject(respData)
+		reject, err := protocol.UnmarshalJSON[protocol.Reject](respData)
 		if err != nil {
 			return nil, err
 		}

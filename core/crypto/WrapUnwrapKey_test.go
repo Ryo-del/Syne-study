@@ -26,3 +26,40 @@ func TestWrapUnwrapKey(t *testing.T) {
 		t.Fatalf("unwrapped key does not match original key")
 	}
 }
+func TestPasswordDerivedKeyRoundTrip(t *testing.T) {
+	password := "correct horse battery staple"
+
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatalf("failed to generate salt: %v", err)
+	}
+
+	masterKey := make([]byte, SharedKeySize)
+	if _, err := rand.Read(masterKey); err != nil {
+		t.Fatalf("failed to generate master key: %v", err)
+	}
+
+	loginKey := DeriveLoginKey(password, salt)
+	wrapped, err := WrapKey(masterKey, loginKey)
+	if err != nil {
+		t.Fatalf("failed to wrap master key: %v", err)
+	}
+
+	// Симулируем вход на новом ПК: та же соль (пришла бы с сервера),
+	// тот же пароль (ввёл пользователь) — должны получить тот же Login Key.
+	loginKeyAgain := DeriveLoginKey(password, salt)
+	unwrapped, err := UnwrapKey(wrapped, loginKeyAgain)
+	if err != nil {
+		t.Fatalf("failed to unwrap master key: %v", err)
+	}
+
+	if !bytes.Equal(unwrapped, masterKey) {
+		t.Fatal("recovered master key does not match original")
+	}
+
+	// Неправильный пароль не должен позволять расшифровать
+	wrongLoginKey := DeriveLoginKey("wrong password", salt)
+	if _, err := UnwrapKey(wrapped, wrongLoginKey); err == nil {
+		t.Fatal("expected error when unwrapping with wrong password, got nil")
+	}
+}

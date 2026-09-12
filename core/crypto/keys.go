@@ -69,8 +69,10 @@ func DerivePasswordHash(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, 32)
 }
 
-func GenerateSalt() []byte {
+func GenerateSalt() ([]byte, error) {
 	salt := make([]byte, 16)
-	rand.Read(salt)
-	return salt
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	return salt, nil
 }
