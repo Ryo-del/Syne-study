@@ -296,7 +296,7 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	message, err := s.service.SendMessage(req.ChatID, req.TargetID, req.Text)
+	message, err := s.service.SendMessage(req.TargetID, req.Text)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

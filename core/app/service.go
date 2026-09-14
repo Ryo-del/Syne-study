@@ -26,8 +26,9 @@ const (
 )
 
 type Config struct {
-	LocalID string `json:"local_id"`
-	Port    int    `json:"port"`
+	LocalID    string `json:"local_id"`
+	Port       int    `json:"port"`
+	ServerAddr string `json:"server_addr"`
 }
 
 type Snapshot struct {
@@ -38,9 +39,16 @@ type Snapshot struct {
 	Neighbors []PeerPresence         `json:"neighbors"`
 	Chats     []ChatSummary          `json:"chats"`
 }
-
+type UserSession struct {
+	UserID    string
+	SessionID string
+	MasterKey []byte
+	FName     string
+	SName     string
+}
 type PeerPresence struct {
 	PeerID   string `json:"peer_id"`
+	UserID   string `json:"user_id,omitempty"`
 	Name     string `json:"name"`
 	Addr     string `json:"addr"`
 	LastSeen int64  `json:"last_seen"`
@@ -110,6 +118,9 @@ type Service struct {
 	subMu       sync.RWMutex
 	subscribers map[chan Event]struct{}
 
+	sessionMu sync.RWMutex
+	session   *UserSession
+
 	wg sync.WaitGroup
 }
 
@@ -121,8 +132,9 @@ func New(config Config) (*Service, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		cfg: Config{
-			LocalID: identity.PeerID,
-			Port:    config.Port,
+			LocalID:    identity.PeerID,
+			Port:       config.Port,
+			ServerAddr: config.ServerAddr,
 		},
 		ctx:         ctx,
 		cancel:      cancel,
@@ -135,6 +147,15 @@ func New(config Config) (*Service, error) {
 	}, nil
 }
 
+func (s *Service) CurrentUserInfo() (userID, fname, sname string, ok bool) {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	if s.session == nil {
+		return "", "", "", false
+	}
+	return s.session.UserID, s.session.FName, s.session.SName, true
+
+}
 func (s *Service) Start() error {
 	if err := history.UpsertPeerAlias(s.cfg.LocalID, "You"); err != nil {
 		return err
@@ -150,6 +171,7 @@ func (s *Service) Start() error {
 	if err := s.bootstrapContactHints(); err != nil {
 		return err
 	}
+	s.node.SetWhoAmIHandler(s)
 	s.wg.Add(1)
 	go s.retryOutboxLoop()
 	return nil
@@ -207,7 +229,52 @@ func (s *Service) Snapshot() (Snapshot, error) {
 		Chats:     chats,
 	}, nil
 }
+func (s *Service) Login(login, password string) error {
+	result, err := s.node.Login(s.ctx, s.cfg.ServerAddr, login, password)
+	if err != nil {
+		return err
+	}
+	s.sessionMu.Lock()
+	s.session = &UserSession{
+		UserID:    login,
+		SessionID: result.SessionID,
+		MasterKey: result.MasterKey,
+		FName:     result.FName,
+		SName:     result.SName,
+	}
+	s.sessionMu.Unlock()
+	s.emit(Event{
+		Type:      "logged_in",
+		Timestamp: time.Now().UnixMilli(),
+	})
+	return nil
+}
+func (s *Service) Register(login, fname, sname, password string) error {
+	if _, err := s.node.Register(s.ctx, s.cfg.ServerAddr, login, fname, sname, password); err != nil {
+		return err
+	}
 
+	return s.Login(login, password)
+}
+func (s *Service) currentSession() (*UserSession, error) {
+	defer s.sessionMu.RUnlock()
+	s.sessionMu.RLock()
+	if s.session == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	return s.session, nil
+
+}
+func (s *Service) Logout() error {
+	defer s.sessionMu.Unlock()
+	s.sessionMu.Lock()
+	if s.session == nil {
+		return fmt.Errorf("not logged in")
+	}
+	// TODO: здесь позже появится вызов синхронизации истории на сервер, до очистки session
+	s.session = nil
+	return nil
+}
 func (s *Service) Subscribe(buffer int) (<-chan Event, func()) {
 	if buffer <= 0 {
 		buffer = 32
@@ -227,14 +294,19 @@ func (s *Service) Subscribe(buffer int) (<-chan Event, func()) {
 }
 
 func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
+	session, err := s.currentSession()
+	if err != nil {
+		return nil, err
+	}
 	items, err := history.LoadMessages(strings.TrimSpace(chatID))
 	if err != nil {
 		return nil, err
 	}
+
 	messages := make([]UIMessage, 0, len(items))
 	for _, item := range items {
 		direction := "incoming"
-		if item.From == s.cfg.LocalID {
+		if item.From == session.UserID {
 			direction = "outgoing"
 		}
 		messages = append(messages, UIMessage{
@@ -267,6 +339,10 @@ func (s *Service) ClearChatHistory() error {
 
 func (s *Service) OpenPrivateChat(peerID, peerAddr, name string) (ChatSummary, error) {
 	peerID = strings.TrimSpace(peerID)
+	session, err := s.currentSession()
+	if err != nil {
+		return ChatSummary{}, err
+	}
 	peerAddr = strings.TrimSpace(peerAddr)
 	name = strings.TrimSpace(name)
 	if peerID == "" {
@@ -280,7 +356,11 @@ func (s *Service) OpenPrivateChat(peerID, peerAddr, name string) (ChatSummary, e
 	if peerAddr != "" && s.node != nil {
 		_ = s.node.RememberHint(peerID, peerAddr)
 	}
-	chatID := privateChatID(s.cfg.LocalID, peerID)
+	targetUserID, err := s.resolveUserID(peerID)
+	if err != nil {
+		return ChatSummary{}, err
+	}
+	chatID := privateChatID(session.UserID, targetUserID)
 	title := name
 	if title == "" {
 		title = s.lookupPeerTitle(peerID)
@@ -299,18 +379,27 @@ func (s *Service) OpenPrivateChat(peerID, peerAddr, name string) (ChatSummary, e
 	return summary, nil
 }
 
-func (s *Service) SendMessage(chatID, targetID, text string) (UIMessage, error) {
-	chatID = strings.TrimSpace(chatID)
-	targetID = strings.TrimSpace(targetID)
+func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
+	session, err := s.currentSession()
+	if err != nil {
+		return UIMessage{}, err
+	}
+	targetPeerID = strings.TrimSpace(targetPeerID)
 	text = strings.TrimSpace(text)
-	if chatID == "" || targetID == "" || text == "" {
+	if targetPeerID == "" || text == "" {
 		return UIMessage{}, fmt.Errorf("chat_id, target_id and text are required")
 	}
-	if blocked, err := corechat.IsBlocked(targetID); err != nil {
+	if blocked, err := corechat.IsBlocked(targetPeerID); err != nil {
 		return UIMessage{}, err
 	} else if blocked {
-		return UIMessage{}, fmt.Errorf("peer is blocked: %s", targetID)
+		return UIMessage{}, fmt.Errorf("peer is blocked: %s", targetPeerID)
 	}
+	targetUserID, err := s.resolveUserID(targetPeerID)
+	if err != nil {
+		return UIMessage{}, err
+	}
+
+	chatID := privateChatID(session.UserID, targetUserID)
 
 	msg := protocol.Message{
 		Version:   protocol.ProtocolVersion,
@@ -318,9 +407,9 @@ func (s *Service) SendMessage(chatID, targetID, text string) (UIMessage, error) 
 		Target:    protocol.TargetPeer,
 		Strategy:  protocol.StrategyUnknown,
 		TTL:       defaultHopTTL,
-		TargetID:  targetID,
+		TargetID:  targetPeerID,
 		ChatID:    chatID,
-		From:      s.cfg.LocalID,
+		From:      session.SessionID,
 		Payload:   []byte(text),
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -339,8 +428,8 @@ func (s *Service) SendMessage(chatID, targetID, text string) (UIMessage, error) 
 	}
 	if err := history.TouchChat(history.ChatRecord{
 		ChatID:        chatID,
-		PeerID:        targetID,
-		Title:         s.lookupPeerTitle(targetID),
+		PeerID:        targetPeerID,
+		Title:         s.lookupPeerTitle(targetPeerID),
 		LastMessage:   text,
 		LastTimestamp: msg.Timestamp,
 	}); err != nil {
@@ -388,6 +477,10 @@ func (s *Service) MarkChatRead(chatID string) error {
 }
 
 func (s *Service) AddContact(contact corechat.Contact) (corechat.Contact, error) {
+	session, err := s.currentSession()
+	if err != nil {
+		return corechat.Contact{}, err
+	}
 	if err := corechat.AddContact(contact); err != nil {
 		return corechat.Contact{}, err
 	}
@@ -401,7 +494,11 @@ func (s *Service) AddContact(contact corechat.Contact) (corechat.Contact, error)
 	if s.node != nil {
 		_ = s.node.RememberHint(created.PeerID, created.Address())
 	}
-	chatID := privateChatID(s.cfg.LocalID, created.PeerID)
+	targetUserID, err := s.resolveUserID(created.PeerID)
+	if err != nil {
+		return corechat.Contact{}, err
+	}
+	chatID := privateChatID(session.UserID, targetUserID)
 	if err := history.TouchChat(history.ChatRecord{
 		ChatID: chatID,
 		PeerID: created.PeerID,
@@ -449,8 +546,16 @@ func (s *Service) DeleteContact(query string) error {
 	if err := history.DeletePeerAlias(peerID); err != nil {
 		return err
 	}
+	session, err := s.currentSession()
+	if err != nil {
+		return err
+	}
+	targetUserID, err := s.resolveUserID(peerID)
+	if err != nil {
+		return err
+	}
 
-	chatID := privateChatID(s.cfg.LocalID, peerID)
+	chatID := privateChatID(session.UserID, targetUserID)
 	chatExists := false
 
 	chats, err := s.listChats()
@@ -592,7 +697,7 @@ func (s *Service) routeMessage(msg protocol.Message) (protocol.Strategy, error) 
 
 func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 	now := time.Now()
-	if blocked, err := corechat.IsBlocked(msg.From); err != nil {
+	if blocked, err := corechat.IsBlocked(sender.ID.String()); err != nil {
 		s.emitError(err)
 		return
 	} else if blocked {
@@ -601,7 +706,7 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 	if !s.allowRate(sender.ID.String(), now, 20, 40) {
 		return
 	}
-	s.registerNeighbor(msg.From, bestAddr(sender), msg.From)
+	s.registerNeighbor(sender.ID.String(), bestAddr(sender), sender.ID.String())
 
 	switch msg.Type {
 	case protocol.MsgJoin, protocol.MsgJoinAck:
@@ -630,8 +735,8 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 		}
 		if err := history.TouchChat(history.ChatRecord{
 			ChatID:        msg.ChatID,
-			PeerID:        msg.From,
-			Title:         s.lookupPeerTitle(msg.From),
+			PeerID:        sender.ID.String(),
+			Title:         s.lookupPeerTitle(sender.ID.String()),
 			LastMessage:   string(msg.Payload),
 			LastTimestamp: msg.Timestamp,
 		}); err != nil {
@@ -667,8 +772,32 @@ func (s *Service) handlePeer(info peer.AddrInfo) {
 		return
 	}
 	s.registerNeighbor(info.ID.String(), bestAddr(info), info.ID.String())
-}
 
+	go s.resolveWhoAmI(info.ID.String())
+}
+func (s *Service) resolveWhoAmI(peerID string) {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := s.node.WhoAmI(ctx, peerID)
+	if err != nil {
+		return
+	}
+
+	s.stateMu.Lock()
+	if item, ok := s.neighbors[peerID]; ok {
+		item.UserID = resp.UserID
+		item.Name = fmt.Sprintf("%s %s", resp.FName, resp.SName)
+		s.neighbors[peerID] = item
+	}
+	s.stateMu.Unlock()
+
+	s.emit(Event{
+		Type:      "peer_discovered",
+		Timestamp: time.Now().UnixMilli(),
+		Peer:      &PeerPresence{PeerID: peerID, UserID: resp.UserID, Name: fmt.Sprintf("%s %s", resp.FName, resp.SName)},
+	})
+}
 func (s *Service) registerNeighbor(peerID, addr, name string) {
 	peerID = strings.TrimSpace(peerID)
 	addr = strings.TrimSpace(addr)
@@ -780,6 +909,31 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 	return chats, nil
 }
 
+func (s *Service) resolveUserID(peerID string) (string, error) {
+	s.stateMu.RLock()
+	if item, ok := s.neighbors[peerID]; ok && item.UserID != "" {
+		s.stateMu.RUnlock()
+		return item.UserID, nil
+	}
+	s.stateMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	resp, err := s.node.WhoAmI(ctx, peerID)
+	if err != nil {
+		return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, err)
+	}
+
+	s.stateMu.Lock()
+	if item, ok := s.neighbors[peerID]; ok {
+		item.UserID = resp.UserID
+		s.neighbors[peerID] = item
+	}
+	s.stateMu.Unlock()
+
+	return resp.UserID, nil
+}
+
 func (s *Service) chatSummaryByID(chatID string) (ChatSummary, error) {
 	chats, err := s.listChats()
 	if err != nil {
@@ -878,6 +1032,11 @@ func (s *Service) retryOutboxLoop() {
 }
 
 func (s *Service) retryDueOutbox() {
+	session, err := s.currentSession()
+	if err != nil {
+		s.emitError(err)
+		return
+	}
 	items, err := history.LoadDueOutbox(time.Now().UnixMilli(), 16)
 	if err != nil {
 		s.emitError(err)
@@ -891,7 +1050,7 @@ func (s *Service) retryDueOutbox() {
 			TTL:       item.TTL,
 			TargetID:  item.TargetID,
 			ChatID:    item.ChatID,
-			From:      s.cfg.LocalID,
+			From:      session.SessionID,
 			Payload:   item.Payload,
 			Timestamp: item.CreatedAt,
 		}
