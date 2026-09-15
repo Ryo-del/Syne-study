@@ -171,6 +171,17 @@ func (s *Service) Start() error {
 	if err := s.bootstrapContactHints(); err != nil {
 		return err
 	}
+	if strings.TrimSpace(s.cfg.ServerAddr) != "" {
+		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+		welcome, err := s.node.ConnectToServer(ctx, s.cfg.ServerAddr)
+		cancel()
+		if err != nil {
+			fmt.Printf("warning: could not connect to study server: %v\n", err)
+		} else {
+			fmt.Printf("study server connected: server_id=%s server_version=%s timestamp=%d\n",
+				welcome.ServerID, welcome.ServerVersion, welcome.Timestamp)
+		}
+	}
 	s.node.SetWhoAmIHandler(s)
 	s.wg.Add(1)
 	go s.retryOutboxLoop()
@@ -409,7 +420,7 @@ func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
 		TTL:       defaultHopTTL,
 		TargetID:  targetPeerID,
 		ChatID:    chatID,
-		From:      session.SessionID,
+		From:      session.UserID,
 		Payload:   []byte(text),
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -1050,7 +1061,7 @@ func (s *Service) retryDueOutbox() {
 			TTL:       item.TTL,
 			TargetID:  item.TargetID,
 			ChatID:    item.ChatID,
-			From:      session.SessionID,
+			From:      session.UserID,
 			Payload:   item.Payload,
 			Timestamp: item.CreatedAt,
 		}

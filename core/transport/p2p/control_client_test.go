@@ -93,7 +93,7 @@ func startTestServerAndPeer(t *testing.T, ctx context.Context) (*Node, string) {
 		t.Fatalf("failed to build server: %v\n%s", err, output)
 	}
 
-	cmd := exec.Command(serverBinary)
+	cmd := exec.Command(serverBinary, "--listen", "/ip4/127.0.0.1/tcp/0")
 	cmd.Dir = serverWorkDir
 
 	stderr, err := cmd.StderrPipe()

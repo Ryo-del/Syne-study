@@ -55,6 +55,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   contacts: [],
   blocked: [],
   neighbors: [],
+  online_users: [],
   chats: [],
 };
 
@@ -429,6 +430,32 @@ function upsertNeighbor(snapshot: Snapshot, incoming: Snapshot["neighbors"][numb
   };
 }
 
+function upsertOnlineUser(snapshot: Snapshot, incoming: Snapshot["online_users"][number]) {
+  const onlineUsers = incoming.online
+    ? snapshot.online_users
+      .filter((item) => item.user_id !== incoming.user_id)
+      .concat(incoming)
+      .sort((a, b) => b.last_seen - a.last_seen)
+    : snapshot.online_users.filter((item) => item.user_id !== incoming.user_id);
+  const chats = snapshot.chats.map((chat) => {
+    const peer = snapshot.neighbors.find((item) => (
+      item.peer_id === chat.peer_id && item.user_id === incoming.user_id
+    ));
+    if (!peer) {
+      return chat;
+    }
+    return {
+      ...chat,
+      online: incoming.online,
+    };
+  });
+  return {
+    ...snapshot,
+    online_users: onlineUsers,
+    chats,
+  };
+}
+
 function describeError(err: unknown, fallback: string) {
   if (err instanceof Error) {
     const message = err.message.trim();
@@ -596,6 +623,17 @@ export default function App() {
     ));
   }, [deferredQuery, snapshot.neighbors]);
 
+  const filteredOnlineUsers = useMemo(() => {
+    const needle = deferredQuery.trim().toLowerCase();
+    if (!needle) {
+      return snapshot.online_users;
+    }
+    return snapshot.online_users.filter((item) => (
+      (item.name || "").toLowerCase().includes(needle) ||
+      item.user_id.toLowerCase().includes(needle)
+    ));
+  }, [deferredQuery, snapshot.online_users]);
+
   const filteredContacts = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
     if (!needle) {
@@ -634,7 +672,7 @@ export default function App() {
     : sidebarView === "contacts"
       ? `${filteredContacts.length}`
     : sidebarView === "network"
-      ? `${filteredNearbyPeers.length}`
+      ? `${filteredOnlineUsers.length + filteredNearbyPeers.length}`
       : `${filteredBlockedPeers.length}`;
 
   const searchPlaceholder = sidebarView === "chats"
@@ -818,6 +856,11 @@ export default function App() {
         if (event.type === "peer_discovered" && event.peer) {
           startTransition(() => {
             setSnapshot((current) => upsertNeighbor(current, event.peer!));
+          });
+        }
+        if (event.type === "presence_updated" && event.user) {
+          startTransition(() => {
+            setSnapshot((current) => upsertOnlineUser(current, event.user!));
           });
         }
         if (
@@ -1415,6 +1458,26 @@ export default function App() {
 
             {sidebarView === "network" ? (
               <>
+                {filteredOnlineUsers.map((user) => (
+                  <button
+                    key={`user-${user.user_id}`}
+                    className="peer-card"
+                    disabled
+                  >
+                    <div className="peer-card-avatar online">
+                      {getPeerAvatar(user.user_id, user.name || user.user_id)}
+                    </div>
+                    <div className="peer-card-info">
+                      <div className="peer-card-info-top">
+                        <strong>{user.name || user.user_id}</strong>
+                      </div>
+                      <div className="peer-card-info-bottom">
+                        <span>{user.user_id}</span>
+                        <span className="live-tag">live</span>
+                      </div>
+                    </div>
+                  </button>
+                ))}
                 {filteredNearbyPeers.map((peer) => (
                   <button
                     key={peer.peer_id}
@@ -1437,7 +1500,7 @@ export default function App() {
                     </div>
                   </button>
                 ))}
-                {!filteredNearbyPeers.length ? (
+                {!filteredOnlineUsers.length && !filteredNearbyPeers.length ? (
                   <div className="empty-state compact">No nearby peers.</div>
                 ) : null}
               </>

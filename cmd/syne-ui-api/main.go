@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,15 +25,17 @@ type server struct {
 
 func main() {
 	var (
-		addr    string
-		localID string
-		port    int
-		workdir string
+		addr       string
+		localID    string
+		port       int
+		workdir    string
+		serverAddr string
 	)
 	flag.StringVar(&addr, "addr", "0.0.0.0:38673", "HTTP listen address")
 	flag.StringVar(&localID, "id", "", "Local peer ID")
 	flag.IntVar(&port, "port", 3000, "Preferred local TCP port")
 	flag.StringVar(&workdir, "workdir", "", "Working directory for local data files")
+	flag.StringVar(&serverAddr, "server-addr", "", "Study Server libp2p multiaddr")
 	flag.Parse()
 
 	if strings.TrimSpace(workdir) != "" {
@@ -45,14 +48,15 @@ func main() {
 	}
 
 	service, err := app.New(app.Config{
-		LocalID: localID,
-		Port:    port,
+		LocalID:    localID,
+		Port:       port,
+		ServerAddr: serverAddr,
 	})
 	if err != nil {
 		log.Fatalf("init service: %v", err)
 	}
 	if err := service.Start(); err != nil {
-		log.Fatalf("start service: %v", err)
+		slog.Warn("failed to start service fully", "error", err)
 	}
 	defer service.Stop()
 
@@ -73,6 +77,9 @@ func main() {
 	mux.HandleFunc("/api/contacts/", srv.handleContactRoutes)
 	mux.HandleFunc("/api/blocked", srv.handleBlocked)
 	mux.HandleFunc("/api/blocked/", srv.handleBlockedRoutes)
+	mux.HandleFunc("/api/auth/register", srv.handleRegister)
+	mux.HandleFunc("/api/auth/login", srv.handleLogin)
+	mux.HandleFunc("/api/auth/logout", srv.handleLogout)
 
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -443,7 +450,59 @@ func (s *server) handleBlockedRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+func (s *server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Login    string `json:"login"`
+		FName    string `json:"fname"`
+		SName    string `json:"sname"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.service.Register(req.Login, req.FName, req.SName, req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
 
+func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Login    string `json:"login"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.service.Login(req.Login, req.Password); err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.service.Logout(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
