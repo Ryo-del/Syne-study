@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	protocol "github.com/Ryo-del/Syne-protocol"
 
@@ -262,6 +263,11 @@ func getDB() (*sql.DB, error) {
 			next_attempt_at INTEGER NOT NULL,
 			last_error TEXT NOT NULL DEFAULT ''
 		);
+		CREATE TABLE IF NOT EXISTS chat_keys (
+    	    chat_id            TEXT PRIMARY KEY,
+    		wrapped_chat_key   BLOB NOT NULL,
+    		created_at         INTEGER NOT NULL
+		);
 	`); err != nil {
 		_ = database.Close()
 		return nil, err
@@ -270,6 +276,31 @@ func getDB() (*sql.DB, error) {
 	db = database
 	currentDB = path
 	return db, nil
+}
+func SaveChatKey(chatID string, wrappedKey []byte) error {
+	database, err := getDB()
+	if err != nil {
+		return err
+	}
+	_, err = database.Exec(`
+		INSERT INTO chat_keys (chat_id, wrapped_chat_key, created_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(chat_id) DO UPDATE SET wrapped_chat_key = excluded.wrapped_chat_key
+	`, chatID, wrappedKey, time.Now().UnixMilli())
+	return err
+}
+
+func LoadChatKey(chatID string) ([]byte, error) {
+	database, err := getDB()
+	if err != nil {
+		return nil, err
+	}
+	var wrappedKey []byte
+	err = database.QueryRow(`SELECT wrapped_chat_key FROM chat_keys WHERE chat_id = ?`, chatID).Scan(&wrappedKey)
+	if err != nil {
+		return nil, err // включая sql.ErrNoRows, если ключа ещё нет — вызывающий код должен это обработать
+	}
+	return wrappedKey, nil
 }
 
 func sqlitePath() (string, error) {

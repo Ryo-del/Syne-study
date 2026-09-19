@@ -14,10 +14,19 @@ export type BlockedPeer = {
 
 export type PeerPresence = {
   peer_id: string;
+  user_id?: string;
   name: string;
   addr: string;
   last_seen: number;
   blocked: boolean;
+};
+
+export type OnlineUser = {
+  user_id: string;
+  peer_id?: string;
+  name?: string;
+  online: boolean;
+  last_seen: number;
 };
 
 export type ChatSummary = {
@@ -49,6 +58,7 @@ export type Snapshot = {
   contacts: Contact[];
   blocked: BlockedPeer[];
   neighbors: PeerPresence[];
+  online_users: OnlineUser[];
   chats: ChatSummary[];
 };
 

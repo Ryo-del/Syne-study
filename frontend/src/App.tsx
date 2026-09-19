@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+
 import {
   blockPeer,
   clearChatHistory,
@@ -24,15 +25,16 @@ import {
   sendMessage,
   unblockPeer,
 } from "./lib/api";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Image as TauriImage } from "@tauri-apps/api/image";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import blackIcon from "../src-tauri/icons/black.jpeg";
-import blueIcon from "../src-tauri/icons/blue.jpeg";
-import greenIcon from "../src-tauri/icons/green.jpeg";
-import orangeIcon from "../src-tauri/icons/orange.jpeg";
-import redIcon from "../src-tauri/icons/red.jpeg";
-import skyIcon from "../src-tauri/icons/sky.jpeg";
+
+import {
+  invoke,
+  isTauri,
+} from "@tauri-apps/api/core";
+
+import {
+  getCurrentWindow,
+} from "@tauri-apps/api/window";
+
 import type {
   AppEvent,
   ChatSummary,
@@ -42,12 +44,57 @@ import type {
   UIMessage,
 } from "./types";
 
-const EMPTY_CONTACT: Contact = {
-  name: "",
-  peer_id: "",
-  ip: "192.168.",
-  port: "",
-};
+import {
+  APP_ICON_OPTIONS,
+  DELETE_HISTORY_HOLD_MS,
+  LANGUAGE_OPTIONS,
+  NOTIFICATION_SOUND_OPTIONS,
+  SETTINGS_SECTIONS,
+  type AppIconId,
+  type AppLanguage,
+  type NotificationSound,
+  type SettingsSectionId,
+  type SidebarView,
+  type ThemePreference,
+} from "./config/settings";
+
+import { TRANSLATIONS } from "./config/translations";
+
+import {
+  readStorage,
+  writeStorage,
+} from "./lib/storage";
+
+import {
+  describeError,
+  getInitial,
+  joinAddress,
+} from "./lib/format";
+
+import {
+  buildContactDraft,
+  buildEmptyContact,
+  EMPTY_CONTACT,
+} from "./lib/contacts";
+
+import {
+  upsertChat,
+  upsertNeighbor,
+  upsertOnlineUser,
+} from "./lib/chats";
+
+import {
+  buildWindowIcon,
+  loadRoundedIconBytes,
+} from "./lib/icons";
+
+import IconRail from "./components/layout/IconRail";
+import PeersPanel from "./components/layout/PeersPanel";
+import ChatArea from "./components/chat/ChatArea";
+import SettingsPopover from "./components/settings/SettingsPopover";
+import ContactPopover from "./components/contacts/ContactPopover";
+import ErrorToast from "./components/common/ErrorToast";
+import ContextMenus from "./components/common/ContextMenus";
 
 const EMPTY_SNAPSHOT: Snapshot = {
   local_id: "",
@@ -59,960 +106,499 @@ const EMPTY_SNAPSHOT: Snapshot = {
   chats: [],
 };
 
-const EMOJI_OPTIONS = ["🙂", "😎", "🤝", "🛰️", "🌿", "🔥", "🦊", "🐼", "😇", "🌙"];
-type SidebarView = "chats" | "contacts" | "network" | "blocked";
-type ThemePreference = "system" | "light" | "dark";
-type NotificationSound = "chime" | "pulse" | "soft" | "none";
-type AppLanguage = "ru" | "en" | "fr" | "de";
-const SETTINGS_SECTIONS = [
-  { id: "notifications", icon: "🔔", labelKey: "settings.notifications" },
-  { id: "language", icon: "🌐", labelKey: "settings.language" },
-  { id: "appearance", icon: "🎨", labelKey: "settings.appearance" },
-  { id: "delete-history", icon: "🗑️", labelKey: "settings.deleteHistory" },
-  { id: "sync-devices", icon: "📱", labelKey: "settings.syncDevices" },
-  { id: "device-key", icon: "🔐", labelKey: "settings.deviceKey" },
-  { id: "system-settings", icon: "⚙️", labelKey: "settings.systemSettings" },
-] as const;
-type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
-const THEME_OPTIONS: Array<{ id: ThemePreference; label: string }> = [
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
-  { id: "system", label: "System" },
-];
-const APP_ICON_OPTIONS = [
-  { id: "blue", label: "Blue", src: blueIcon },
-  { id: "green", label: "Green", src: greenIcon },
-  { id: "orange", label: "Orange", src: orangeIcon },
-  { id: "red", label: "Red", src: redIcon },
-  { id: "sky", label: "Sky", src: skyIcon },
-  { id: "black", label: "Black", src: blackIcon },
-] as const;
-type AppIconId = (typeof APP_ICON_OPTIONS)[number]["id"];
-const NOTIFICATION_SOUND_OPTIONS: Array<{ id: NotificationSound; label: string }> = [
-  { id: "chime", label: "Chime" },
-  { id: "pulse", label: "Pulse" },
-  { id: "soft", label: "Soft" },
-  { id: "none", label: "None" },
-];
-const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string }> = [
-  { id: "ru", label: "Русский" },
-  { id: "en", label: "Английский" },
-  { id: "fr", label: "Французский" },
-  { id: "de", label: "Немецкий" },
-];
-const APP_ICON_SIZE = 1024;
-const APP_ICON_VISIBLE_RATIO = 0.86;
-const APP_ICON_CORNER_RADIUS_RATIO = 0.223;
-const DELETE_HISTORY_HOLD_MS = 3000;
-
-const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
-  ru: {
-    "settings.title": "Настройки",
-    "settings.preferences": "Параметры",
-    "settings.back": "Назад",
-    "settings.close": "Закрыть",
-    "settings.notifications": "Уведомления",
-    "settings.language": "Язык",
-    "settings.appearance": "Внешний вид",
-    "settings.deleteHistory": "Удалить историю чата",
-    "settings.syncDevices": "Синхронизация устройств",
-    "settings.deviceKey": "Ключ устройства",
-    "settings.systemSettings": "Системные настройки",
-    "notifications.enabled": "Уведомления",
-    "notifications.preview": "Предпросмотр",
-    "notifications.sound": "Звук",
-    "notifications.enabledMeta": "Показывать уведомления о новых сообщениях",
-    "notifications.previewMeta": "Показывать текст сообщения в уведомлении",
-    "language.current": "Текущий язык",
-    "appearance.theme": "Тема",
-    "appearance.icon": "Иконка",
-    "appearance.saved": "Сохранено локально для этого устройства",
-    "deleteHistory.title": "Удалить всю историю",
-    "deleteHistory.description": "Будут удалены все переписки и сообщения на этом устройстве.",
-    "deleteHistory.openConfirm": "Удалить всю историю",
-    "deleteHistory.confirmTitle": "Вы точно хотите удалить всю историю переписок?",
-    "deleteHistory.confirmDescription": "Это действие нельзя отменить. Удерживайте кнопку подтверждения 3 секунды.",
-    "deleteHistory.cancel": "Отмена",
-    "deleteHistory.confirm": "Подтвердить",
-    "deleteHistory.hold": "Удерживайте...",
-    "deleteHistory.deleted": "История переписок удалена",
-    "deleteHistory.failed": "Не удалось удалить историю",
-  },
-  en: {
-    "settings.title": "Settings",
-    "settings.preferences": "Preferences",
-    "settings.back": "Back",
-    "settings.close": "Close",
-    "settings.notifications": "Notifications",
-    "settings.language": "Language",
-    "settings.appearance": "Appearance",
-    "settings.deleteHistory": "Delete chat history",
-    "settings.syncDevices": "Sync devices",
-    "settings.deviceKey": "Device key",
-    "settings.systemSettings": "System settings",
-    "notifications.enabled": "Notifications",
-    "notifications.preview": "Preview",
-    "notifications.sound": "Sound",
-    "notifications.enabledMeta": "Show notifications for new messages",
-    "notifications.previewMeta": "Show message text in notifications",
-    "language.current": "Current language",
-    "appearance.theme": "Theme",
-    "appearance.icon": "Icon",
-    "appearance.saved": "Saved locally for this device",
-    "deleteHistory.title": "Delete all history",
-    "deleteHistory.description": "All chats and messages on this device will be removed.",
-    "deleteHistory.openConfirm": "Delete all history",
-    "deleteHistory.confirmTitle": "Are you sure you want to delete all chat history?",
-    "deleteHistory.confirmDescription": "This cannot be undone. Hold confirm for 3 seconds.",
-    "deleteHistory.cancel": "Cancel",
-    "deleteHistory.confirm": "Confirm",
-    "deleteHistory.hold": "Keep holding...",
-    "deleteHistory.deleted": "Chat history deleted",
-    "deleteHistory.failed": "Failed to delete history",
-  },
-  fr: {
-    "settings.title": "Paramètres",
-    "settings.preferences": "Préférences",
-    "settings.back": "Retour",
-    "settings.close": "Fermer",
-    "settings.notifications": "Notifications",
-    "settings.language": "Langue",
-    "settings.appearance": "Apparence",
-    "settings.deleteHistory": "Supprimer l'historique",
-    "settings.syncDevices": "Synchroniser les appareils",
-    "settings.deviceKey": "Clé de l'appareil",
-    "settings.systemSettings": "Paramètres système",
-    "notifications.enabled": "Notifications",
-    "notifications.preview": "Aperçu",
-    "notifications.sound": "Son",
-    "notifications.enabledMeta": "Afficher les notifications des nouveaux messages",
-    "notifications.previewMeta": "Afficher le texte du message",
-    "language.current": "Langue actuelle",
-    "appearance.theme": "Thème",
-    "appearance.icon": "Icône",
-    "appearance.saved": "Enregistré localement sur cet appareil",
-    "deleteHistory.title": "Supprimer tout l'historique",
-    "deleteHistory.description": "Toutes les conversations et messages de cet appareil seront supprimés.",
-    "deleteHistory.openConfirm": "Supprimer tout l'historique",
-    "deleteHistory.confirmTitle": "Voulez-vous vraiment supprimer tout l'historique ?",
-    "deleteHistory.confirmDescription": "Cette action est irréversible. Maintenez confirmer pendant 3 secondes.",
-    "deleteHistory.cancel": "Annuler",
-    "deleteHistory.confirm": "Confirmer",
-    "deleteHistory.hold": "Maintenez...",
-    "deleteHistory.deleted": "Historique supprimé",
-    "deleteHistory.failed": "Impossible de supprimer l'historique",
-  },
-  de: {
-    "settings.title": "Einstellungen",
-    "settings.preferences": "Optionen",
-    "settings.back": "Zurück",
-    "settings.close": "Schließen",
-    "settings.notifications": "Benachrichtigungen",
-    "settings.language": "Sprache",
-    "settings.appearance": "Darstellung",
-    "settings.deleteHistory": "Chatverlauf löschen",
-    "settings.syncDevices": "Geräte synchronisieren",
-    "settings.deviceKey": "Geräteschlüssel",
-    "settings.systemSettings": "Systemeinstellungen",
-    "notifications.enabled": "Benachrichtigungen",
-    "notifications.preview": "Vorschau",
-    "notifications.sound": "Ton",
-    "notifications.enabledMeta": "Benachrichtigungen für neue Nachrichten anzeigen",
-    "notifications.previewMeta": "Nachrichtentext in Benachrichtigungen anzeigen",
-    "language.current": "Aktuelle Sprache",
-    "appearance.theme": "Design",
-    "appearance.icon": "Icon",
-    "appearance.saved": "Lokal auf diesem Gerät gespeichert",
-    "deleteHistory.title": "Gesamten Verlauf löschen",
-    "deleteHistory.description": "Alle Chats und Nachrichten auf diesem Gerät werden gelöscht.",
-    "deleteHistory.openConfirm": "Gesamten Verlauf löschen",
-    "deleteHistory.confirmTitle": "Möchten Sie wirklich den gesamten Chatverlauf löschen?",
-    "deleteHistory.confirmDescription": "Dies kann nicht rückgängig gemacht werden. Halten Sie Bestätigen 3 Sekunden lang.",
-    "deleteHistory.cancel": "Abbrechen",
-    "deleteHistory.confirm": "Bestätigen",
-    "deleteHistory.hold": "Gedrückt halten...",
-    "deleteHistory.deleted": "Chatverlauf gelöscht",
-    "deleteHistory.failed": "Verlauf konnte nicht gelöscht werden",
-  },
-};
-
-function formatTime(value: number) {
-  if (!value) {
-    return "";
-  }
-  return new Intl.DateTimeFormat([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(value);
-}
-
-function formatDate(value: number) {
-  if (!value) return "";
-  return new Intl.DateTimeFormat([], {
-    month: "short",
-    day: "numeric",
-  }).format(value).toUpperCase();
-}
-
-function splitAddress(addr?: string) {
-  if (!addr) {
-    return { ip: "", port: "" };
-  }
-  if (addr.startsWith("/")) {
-    const parts = addr.split("/");
-    if (parts.length >= 5 && (parts[1] === "ip4" || parts[1] === "ip6")) {
-      return { ip: parts[2], port: parts[4] };
-    }
-  }
-  const index = addr.lastIndexOf(":");
-  if (index === -1) {
-    return { ip: addr.replace(/^\[|\]$/g, ""), port: "" };
-  }
-  return {
-    ip: addr.slice(0, index).replace(/^\[|\]$/g, ""),
-    port: addr.slice(index + 1),
-  };
-}
-
-function joinAddress(ip?: string, port?: string) {
-  const cleanIP = (ip ?? "").trim();
-  const cleanPort = (port ?? "").trim();
-  if (!cleanIP) {
-    return "";
-  }
-  if (!cleanPort) {
-    return cleanIP;
-  }
-  if (cleanIP.includes(":") && !cleanIP.startsWith("[") && !cleanIP.endsWith("]")) {
-    return `[${cleanIP}]:${cleanPort}`;
-  }
-  return `${cleanIP}:${cleanPort}`;
-}
-
-async function loadIconImage(src: string) {
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const nextImage = new Image();
-    nextImage.onload = () => resolve(nextImage);
-    nextImage.onerror = () => reject(new Error(`Failed to load icon: ${src}`));
-    nextImage.src = src;
-  });
-
-  const width = image.naturalWidth || image.width;
-  const height = image.naturalHeight || image.height;
-  if (!width || !height) {
-    throw new Error("Selected icon has invalid dimensions");
-  }
-
-  return { image, width, height };
-}
-
-function drawRoundedIconCanvas(image: HTMLImageElement, width: number, height: number) {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return null;
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = APP_ICON_SIZE;
-  canvas.height = APP_ICON_SIZE;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas 2D context is unavailable");
-  }
-
-  const visibleSize = APP_ICON_SIZE * APP_ICON_VISIBLE_RATIO;
-  const offset = (APP_ICON_SIZE - visibleSize) / 2;
-  const radius = visibleSize * APP_ICON_CORNER_RADIUS_RATIO;
-  const scale = Math.max(visibleSize / width, visibleSize / height);
-  const drawWidth = width * scale;
-  const drawHeight = height * scale;
-  const drawX = offset + (visibleSize - drawWidth) / 2;
-  const drawY = offset + (visibleSize - drawHeight) / 2;
-
-  ctx.beginPath();
-  ctx.roundRect(offset, offset, visibleSize, visibleSize, radius);
-  ctx.clip();
-  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-  return canvas;
-}
-
-async function buildWindowIcon(src: string) {
-  const { image, width, height } = await loadIconImage(src);
-  const canvas = drawRoundedIconCanvas(image, width, height);
-  if (!canvas) {
-    return null;
-  }
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas 2D context is unavailable");
-  }
-
-  const rgba = new Uint8Array(ctx.getImageData(0, 0, APP_ICON_SIZE, APP_ICON_SIZE).data);
-  return TauriImage.new(rgba, APP_ICON_SIZE, APP_ICON_SIZE);
-}
-
-async function loadRoundedIconBytes(src: string) {
-  const { image, width, height } = await loadIconImage(src);
-  const canvas = drawRoundedIconCanvas(image, width, height);
-  if (!canvas) {
-    return null;
-  }
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((nextBlob) => {
-      if (nextBlob) {
-        resolve(nextBlob);
-      } else {
-        reject(new Error("Failed to encode rounded app icon"));
-      }
-    }, "image/png");
-  });
-
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
-function buildEmptyContact(overrides?: Partial<Contact>): Contact {
-  return {
-    ...EMPTY_CONTACT,
-    ...overrides,
-  };
-}
-
-function buildContactDraft(chat: ChatSummary | null, fallbackAddr?: string): Contact {
-  if (!chat) {
-    return buildEmptyContact();
-  }
-  const { ip, port } = splitAddress(chat.known_addr || fallbackAddr);
-  return buildEmptyContact({
-    name: chat.title !== chat.peer_id ? chat.title : "",
-    peer_id: chat.peer_id,
-    ip: ip || EMPTY_CONTACT.ip,
-    port,
-  });
-}
-
-function upsertChat(chats: ChatSummary[], incoming: ChatSummary) {
-  const next = chats.filter((item) => item.chat_id !== incoming.chat_id);
-  next.unshift(incoming);
-  next.sort((a, b) => {
-    if (a.last_timestamp === b.last_timestamp) {
-      return a.title.localeCompare(b.title);
-    }
-    return b.last_timestamp - a.last_timestamp;
-  });
-  return next;
-}
-
-function upsertNeighbor(snapshot: Snapshot, incoming: Snapshot["neighbors"][number]) {
-  const neighbors = snapshot.neighbors
-    .filter((item) => item.peer_id !== incoming.peer_id)
-    .concat(incoming)
-    .sort((a, b) => b.last_seen - a.last_seen);
-  const hasContactAlias = snapshot.contacts.some(
-    (item) => item.peer_id === incoming.peer_id && item.name,
-  );
-  const chats = snapshot.chats.map((chat) => {
-    if (chat.peer_id !== incoming.peer_id) {
-      return chat;
-    }
-    return {
-      ...chat,
-      known_addr: incoming.addr,
-      online: true,
-      title: hasContactAlias ? chat.title : incoming.name || chat.title,
-    };
-  });
-  return {
-    ...snapshot,
-    neighbors,
-    chats,
-  };
-}
-
-function upsertOnlineUser(snapshot: Snapshot, incoming: Snapshot["online_users"][number]) {
-  const onlineUsers = incoming.online
-    ? snapshot.online_users
-      .filter((item) => item.user_id !== incoming.user_id)
-      .concat(incoming)
-      .sort((a, b) => b.last_seen - a.last_seen)
-    : snapshot.online_users.filter((item) => item.user_id !== incoming.user_id);
-  const chats = snapshot.chats.map((chat) => {
-    const peer = snapshot.neighbors.find((item) => (
-      item.peer_id === chat.peer_id && item.user_id === incoming.user_id
-    ));
-    if (!peer) {
-      return chat;
-    }
-    return {
-      ...chat,
-      online: incoming.online,
-    };
-  });
-  return {
-    ...snapshot,
-    online_users: onlineUsers,
-    chats,
-  };
-}
-
-function describeError(err: unknown, fallback: string) {
-  if (err instanceof Error) {
-    const message = err.message.trim();
-    if (!message || message === "The string did not match the expected pattern.") {
-      return fallback;
-    }
-    return message;
-  }
-  return fallback;
-}
-
-function readStorage<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) {
-      return fallback;
-    }
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeStorage<T>(key: string, value: T) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(key, JSON.stringify(value));
-}
-
-function getInitial(name: string): string {
-  if (!name) return "?";
-  const cleaned = name.replace(/^@/, "").trim();
-  return cleaned.charAt(0).toUpperCase();
-}
-
 export default function App() {
-  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY_SNAPSHOT);
-  const [selectedChatId, setSelectedChatId] = useState("");
-  const [messages, setMessages] = useState<Record<string, UIMessage[]>>({});
-  const [hiddenChatIds, setHiddenChatIds] = useState<string[]>(() =>
-    readStorage("syne.hidden_chat_ids", []),
-  );
-  const [chatContextMenu, setChatContextMenu] = useState<{
-    chatId: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [contactContextMenu, setContactContextMenu] = useState<{
-    peerId: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [query, setQuery] = useState("");
-  const [composer, setComposer] = useState("");
-  const [error, setError] = useState("");
-  const [errorToastKey, setErrorToastKey] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [showNewContactPopover, setShowNewContactPopover] = useState(false);
-  const [contactForm, setContactForm] = useState<Contact>(EMPTY_CONTACT);
-  const [inviteCode, setInviteCode] = useState<InviteCode | null>(null);
-  const [invitePeerIdDraft, setInvitePeerIdDraft] = useState("");
-  const [blockReason, setBlockReason] = useState("");
-  const [editingPeerName, setEditingPeerName] = useState(false);
-  const [peerNameDraft, setPeerNameDraft] = useState("");
-  const [showDetailPanel, setShowDetailPanel] = useState(false);
-  const [sidebarView, setSidebarView] = useState<SidebarView>("chats");
-  const [showSettings, setShowSettings] = useState(false);
-  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId | null>(null);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
-    readStorage("syne.theme_preference", "system"),
-  );
-  const [notificationsEnabled, setNotificationsEnabled] = useState(() =>
-    readStorage("syne.notifications_enabled", true),
-  );
-  const [notificationPreview, setNotificationPreview] = useState(() =>
-    readStorage("syne.notification_preview", true),
-  );
-  const [notificationSound, setNotificationSound] = useState<NotificationSound>(() => {
-    const stored = readStorage<string>("syne.notification_sound", "chime");
-    return NOTIFICATION_SOUND_OPTIONS.some((item) => item.id === stored)
-      ? stored as NotificationSound
-      : "chime";
-  });
-  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => {
-    const stored = readStorage<string>("syne.language", "ru");
-    return LANGUAGE_OPTIONS.some((item) => item.id === stored)
-      ? stored as AppLanguage
-      : "ru";
-  });
-  const [selectedAppIcon, setSelectedAppIcon] = useState<AppIconId>(() => {
-    const stored = readStorage<string>("syne.app_icon", "blue");
-    return APP_ICON_OPTIONS.some((item) => item.id === stored)
-      ? stored as AppIconId
-      : "blue";
-  });
-  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => {
-    if (typeof window === "undefined") {
-      return "dark";
-    }
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  });
-  const [emojiPickerTarget, setEmojiPickerTarget] = useState<"self" | "peer" | null>(null);
-  const [selfEmoji, setSelfEmoji] = useState(() => readStorage("syne.self_emoji", "🙂"));
-  const [peerEmojis, setPeerEmojis] = useState<Record<string, string>>(() =>
-    readStorage("syne.peer_emojis", {}),
-  );
-  const [showDeleteHistoryConfirm, setShowDeleteHistoryConfirm] = useState(false);
-  const [deleteHoldProgress, setDeleteHoldProgress] = useState(0);
-  const [deletingHistory, setDeletingHistory] = useState(false);
-  const messageStreamRef = useRef<HTMLDivElement | null>(null);
-  const pendingScrollBehaviorRef = useRef<ScrollBehavior | null>(null);
-  const deleteHoldTimerRef = useRef<number | null>(null);
-  const deleteHoldFrameRef = useRef<number | null>(null);
-  const deleteHoldStartedAtRef = useRef(0);
-  const deferredQuery = useDeferredValue(query);
+  const [snapshot, setSnapshot] =
+    useState<Snapshot>(EMPTY_SNAPSHOT);
+
+  const [selectedChatId, setSelectedChatId] =
+    useState("");
+
+  const [messages, setMessages] =
+    useState<Record<string, UIMessage[]>>({});
+
+  const [hiddenChatIds, setHiddenChatIds] =
+    useState<string[]>(() =>
+      readStorage(
+        "syne.hidden_chat_ids",
+        [],
+      ),
+    );
+
+  const [chatContextMenu, setChatContextMenu] =
+    useState<{
+      chatId: string;
+      x: number;
+      y: number;
+    } | null>(null);
+
+  const [contactContextMenu, setContactContextMenu] =
+    useState<{
+      peerId: string;
+      x: number;
+      y: number;
+    } | null>(null);
+
+  const [query, setQuery] =
+    useState("");
+
+  const [composer, setComposer] =
+    useState("");
+
+  const [error, setError] =
+    useState("");
+
+  const [errorToastKey, setErrorToastKey] =
+    useState(0);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [showNewContactPopover, setShowNewContactPopover] =
+    useState(false);
+
+  const [contactForm, setContactForm] =
+    useState<Contact>(EMPTY_CONTACT);
+
+  const [inviteCode, setInviteCode] =
+    useState<InviteCode | null>(null);
+
+  const [invitePeerIdDraft, setInvitePeerIdDraft] =
+    useState("");
+
+  const [blockReason, setBlockReason] =
+    useState("");
+
+  const [editingPeerName, setEditingPeerName] =
+    useState(false);
+
+  const [peerNameDraft, setPeerNameDraft] =
+    useState("");
+
+  const [showDetailPanel, setShowDetailPanel] =
+    useState(false);
+
+  const [sidebarView, setSidebarView] =
+    useState<SidebarView>("chats");
+
+  const [showSettings, setShowSettings] =
+    useState(false);
+
+  const [activeSettingsSection, setActiveSettingsSection] =
+    useState<SettingsSectionId | null>(null);
+
+  const [themePreference, setThemePreference] =
+    useState<ThemePreference>(() =>
+      readStorage(
+        "syne.theme_preference",
+        "system",
+      ),
+    );
+
+  const [notificationsEnabled, setNotificationsEnabled] =
+    useState(() =>
+      readStorage(
+        "syne.notifications_enabled",
+        true,
+      ),
+    );
+
+  const [notificationPreview, setNotificationPreview] =
+    useState(() =>
+      readStorage(
+        "syne.notification_preview",
+        true,
+      ),
+    );
+
+  const [notificationSound, setNotificationSound] =
+    useState<NotificationSound>(() => {
+      const stored =
+        readStorage<string>(
+          "syne.notification_sound",
+          "chime",
+        );
+
+      return NOTIFICATION_SOUND_OPTIONS.some(
+        (item) => item.id === stored,
+      )
+        ? (stored as NotificationSound)
+        : "chime";
+    });
+
+  const [appLanguage, setAppLanguage] =
+    useState<AppLanguage>(() => {
+      const stored =
+        readStorage<string>(
+          "syne.language",
+          "ru",
+        );
+
+      return LANGUAGE_OPTIONS.some(
+        (item) => item.id === stored,
+      )
+        ? (stored as AppLanguage)
+        : "ru";
+    });
+
+  const [selectedAppIcon, setSelectedAppIcon] =
+    useState<AppIconId>(() => {
+      const stored =
+        readStorage<string>(
+          "syne.app_icon",
+          "blue",
+        );
+
+      return APP_ICON_OPTIONS.some(
+        (item) => item.id === stored,
+      )
+        ? (stored as AppIconId)
+        : "blue";
+    });
+
+  const [systemTheme, setSystemTheme] =
+    useState<"light" | "dark">(() => {
+      if (typeof window === "undefined") {
+        return "dark";
+      }
+
+      return window.matchMedia(
+        "(prefers-color-scheme: light)",
+      ).matches
+        ? "light"
+        : "dark";
+    });
+
+  const [emojiPickerTarget, setEmojiPickerTarget] =
+    useState<"self" | "peer" | null>(null);
+
+  const [selfEmoji, setSelfEmoji] =
+    useState(() =>
+      readStorage(
+        "syne.self_emoji",
+        "🙂",
+      ),
+    );
+
+  const [peerEmojis, setPeerEmojis] =
+    useState<Record<string, string>>(() =>
+      readStorage(
+        "syne.peer_emojis",
+        {},
+      ),
+    );
+
+  const [
+    showDeleteHistoryConfirm,
+    setShowDeleteHistoryConfirm,
+  ] = useState(false);
+
+  const [
+    deleteHoldProgress,
+    setDeleteHoldProgress,
+  ] = useState(0);
+
+  const [
+    deletingHistory,
+    setDeletingHistory,
+  ] = useState(false);
+
+ const messageStreamRef =
+  useRef<HTMLDivElement>(null);
+
+  const pendingScrollBehaviorRef =
+    useRef<ScrollBehavior | null>(null);
+
+  const deleteHoldTimerRef =
+    useRef<number | null>(null);
+
+  const deleteHoldFrameRef =
+    useRef<number | null>(null);
+
+  const deleteHoldStartedAtRef =
+    useRef(0);
+
+  const deferredQuery =
+    useDeferredValue(query);
+
   const visibleChats = useMemo(
-    () => snapshot.chats.filter((item) => !hiddenChatIds.includes(item.chat_id)),
-    [hiddenChatIds, snapshot.chats],
+    () =>
+      snapshot.chats.filter(
+        (item) =>
+          !hiddenChatIds.includes(
+            item.chat_id,
+          ),
+      ),
+    [
+      hiddenChatIds,
+      snapshot.chats,
+    ],
   );
 
-  const selectedChat = visibleChats.find((item) => item.chat_id === selectedChatId) ?? null;
-  const selectedContact = selectedChat
-    ? snapshot.contacts.find((item) => item.peer_id === selectedChat.peer_id) ?? null
-    : null;
-  const selectedPeer = selectedChat
-    ? snapshot.neighbors.find((item) => item.peer_id === selectedChat.peer_id) ?? null
-    : null;
-  const selectedMessages = selectedChat ? messages[selectedChat.chat_id] ?? [] : [];
-  const selectedAddr = selectedChat?.known_addr || selectedPeer?.addr || "";
-  const selectedPeerEmoji = selectedChat
-    ? peerEmojis[selectedChat.peer_id] ?? getInitial(selectedChat.title || selectedChat.peer_id)
-    : "🙂";
-  const activeSettingsItem = activeSettingsSection
-    ? SETTINGS_SECTIONS.find((item) => item.id === activeSettingsSection) ?? null
-    : null;
-  const t = (key: string) => TRANSLATIONS[appLanguage][key] ?? TRANSLATIONS.en[key] ?? key;
-  const resolvedTheme = themePreference === "system" ? systemTheme : themePreference;
-  const currentAppIcon = APP_ICON_OPTIONS.find((item) => item.id === selectedAppIcon) ?? APP_ICON_OPTIONS[0];
+  const selectedChat =
+    visibleChats.find(
+      (item) =>
+        item.chat_id === selectedChatId,
+    ) ?? null;
+    
+  const selectedContact =
+    selectedChat
+      ? snapshot.contacts.find(
+          (item) =>
+            item.peer_id ===
+            selectedChat.peer_id,
+        ) ?? null
+      : null;
+        
+  const selectedPeer =
+    selectedChat
+      ? snapshot.neighbors.find(
+          (item) =>
+            item.peer_id ===
+            selectedChat.peer_id,
+        ) ?? null
+      : null;
+
+  const selectedMessages =
+    selectedChat
+      ? messages[
+          selectedChat.chat_id
+        ] ?? []
+      : [];
+
+  const selectedAddr =
+    selectedChat?.known_addr ||
+    selectedPeer?.addr ||
+    "";
+
+  const selectedPeerEmoji =
+    selectedChat
+      ? peerEmojis[
+          selectedChat.peer_id
+        ] ??
+        getInitial(
+          selectedChat.title ||
+            selectedChat.peer_id,
+        )
+      : "🙂";
+
+  const t = (key: string) =>
+    TRANSLATIONS[appLanguage][key] ??
+    TRANSLATIONS.en[key] ??
+    key;
+  async function refreshBootstrap(selectFirst = false) {
+  try {
+    const nextSnapshot = await loadBootstrap();
+
+    startTransition(() => {
+      setSnapshot(nextSnapshot);
+
+      if (selectFirst && !selectedChatId) {
+        const firstChat = nextSnapshot.chats.find(
+          (chat) => !hiddenChatIds.includes(chat.chat_id),
+        );
+
+        if (firstChat) {
+          setSelectedChatId(firstChat.chat_id);
+        }
+      }
+    });
+  } catch (err) {
+    setError(
+      describeError(
+        err,
+        "Failed to refresh application data",
+      ),
+    );
+  }
+}
+async function refreshMessages(chatId: string) {
+  const nextMessages = await loadMessages(chatId);
+
+  setMessages((current) => ({
+    ...current,
+    [chatId]: nextMessages,
+  }));
+}
+  const resolvedTheme =
+    themePreference === "system"
+      ? systemTheme
+      : themePreference;
+
+  const currentAppIcon =
+    APP_ICON_OPTIONS.find(
+      (item) =>
+        item.id === selectedAppIcon,
+    ) ??
+    APP_ICON_OPTIONS[0];
 
   const filteredChats = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
+    const needle =
+      deferredQuery
+        .trim()
+        .toLowerCase();
+
     if (!needle) {
       return visibleChats;
     }
-    return visibleChats.filter((item) => (
-      item.title.toLowerCase().includes(needle) ||
-      item.peer_id.toLowerCase().includes(needle)
-    ));
-  }, [deferredQuery, visibleChats]);
 
-  const filteredNearbyPeers = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
-    if (!needle) {
-      return snapshot.neighbors;
-    }
-    return snapshot.neighbors.filter((item) => (
-      (item.name || "").toLowerCase().includes(needle) ||
-      item.peer_id.toLowerCase().includes(needle) ||
-      item.addr.toLowerCase().includes(needle)
-    ));
-  }, [deferredQuery, snapshot.neighbors]);
+    return visibleChats.filter(
+      (item) =>
+        item.title
+          .toLowerCase()
+          .includes(needle) ||
+        item.peer_id
+          .toLowerCase()
+          .includes(needle),
+    );
+  }, [
+    deferredQuery,
+    visibleChats,
+  ]);
 
-  const filteredOnlineUsers = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
-    if (!needle) {
-      return snapshot.online_users;
-    }
-    return snapshot.online_users.filter((item) => (
-      (item.name || "").toLowerCase().includes(needle) ||
-      item.user_id.toLowerCase().includes(needle)
-    ));
-  }, [deferredQuery, snapshot.online_users]);
+  const filteredNearbyPeers =
+    useMemo(() => {
+      const needle =
+        deferredQuery
+          .trim()
+          .toLowerCase();
 
-  const filteredContacts = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
-    if (!needle) {
-      return snapshot.contacts;
-    }
-    return snapshot.contacts.filter((item) => (
-      item.name.toLowerCase().includes(needle) ||
-      item.peer_id.toLowerCase().includes(needle) ||
-      item.ip.toLowerCase().includes(needle) ||
-      item.port.toLowerCase().includes(needle)
-    ));
-  }, [deferredQuery, snapshot.contacts]);
-
-  const filteredBlockedPeers = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
-    if (!needle) {
-      return snapshot.blocked;
-    }
-    return snapshot.blocked.filter((item) => (
-      (item.name || "").toLowerCase().includes(needle) ||
-      item.peer_id.toLowerCase().includes(needle) ||
-      (item.reason || "").toLowerCase().includes(needle)
-    ));
-  }, [deferredQuery, snapshot.blocked]);
-
-  const sidebarTitle = sidebarView === "chats"
-    ? "Chats"
-    : sidebarView === "contacts"
-      ? "Contacts"
-    : sidebarView === "network"
-      ? "Nearby"
-      : "Black list";
-
-  const sidebarBadge = sidebarView === "chats"
-    ? `${filteredChats.length}`
-    : sidebarView === "contacts"
-      ? `${filteredContacts.length}`
-    : sidebarView === "network"
-      ? `${filteredOnlineUsers.length + filteredNearbyPeers.length}`
-      : `${filteredBlockedPeers.length}`;
-
-  const searchPlaceholder = sidebarView === "chats"
-    ? "Search chats..."
-    : sidebarView === "contacts"
-      ? "Search contacts..."
-    : sidebarView === "network"
-      ? "Search nearby peers..."
-      : "Search blocked peers...";
-
-  async function refreshBootstrap(preserveSelection = true) {
-    const nextSnapshot = await loadBootstrap();
-    const nextVisibleChats = nextSnapshot.chats.filter((item) => !hiddenChatIds.includes(item.chat_id));
-    startTransition(() => {
-      setSnapshot(nextSnapshot);
-      if (!preserveSelection) {
-        setSelectedChatId(nextVisibleChats[0]?.chat_id ?? "");
-        return;
-      }
-      if (selectedChatId) {
-        const exists = nextVisibleChats.some((item) => item.chat_id === selectedChatId);
-        if (!exists) {
-          setSelectedChatId(nextVisibleChats[0]?.chat_id ?? "");
-        }
-      } else {
-        setSelectedChatId(nextVisibleChats[0]?.chat_id ?? "");
-      }
-    });
-  }
-
-  async function refreshMessages(chatId: string) {
-    const items = await loadMessages(chatId);
-    startTransition(() => {
-      setMessages((current) => ({ ...current, [chatId]: items }));
-    });
-  }
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function bootstrap() {
-      try {
-        setLoading(true);
-        await refreshBootstrap(false);
-      } catch (err) {
-        if (mounted) {
-          setError(describeError(err, "Failed to reach local backend"));
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void bootstrap();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
-      event.preventDefault();
-    };
-
-    const handlePointerDown = () => {
-      setChatContextMenu(null);
-      setContactContextMenu(null);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      const modifier = event.ctrlKey || event.metaKey;
-
-      if (key === "escape") {
-        setChatContextMenu(null);
+      if (!needle) {
+        return snapshot.neighbors;
       }
 
-      if (key === "f12") {
-        event.preventDefault();
-        return;
+      return snapshot.neighbors.filter(
+        (item) =>
+          (item.name || "")
+            .toLowerCase()
+            .includes(needle) ||
+          item.peer_id
+            .toLowerCase()
+            .includes(needle) ||
+          item.addr
+            .toLowerCase()
+            .includes(needle),
+      );
+    }, [
+      deferredQuery,
+      snapshot.neighbors,
+    ]);
+
+  const filteredOnlineUsers =
+    useMemo(() => {
+      const needle =
+        deferredQuery
+          .trim()
+          .toLowerCase();
+
+      if (!needle) {
+        return snapshot.online_users;
       }
 
-      if (modifier && key === "u") {
-        event.preventDefault();
-        return;
+      return snapshot.online_users.filter(
+        (item) =>
+          (item.name || "")
+            .toLowerCase()
+            .includes(needle) ||
+          item.user_id
+            .toLowerCase()
+            .includes(needle),
+      );
+    }, [
+      deferredQuery,
+      snapshot.online_users,
+    ]);
+
+  const filteredContacts =
+    useMemo(() => {
+      const needle =
+        deferredQuery
+          .trim()
+          .toLowerCase();
+
+      if (!needle) {
+        return snapshot.contacts;
       }
 
-      if (modifier && event.shiftKey && (key === "i" || key === "j" || key === "c")) {
-        event.preventDefault();
-        return;
+      return snapshot.contacts.filter(
+        (item) =>
+          item.name
+            .toLowerCase()
+            .includes(needle) ||
+          item.peer_id
+            .toLowerCase()
+            .includes(needle) ||
+          item.ip
+            .toLowerCase()
+            .includes(needle) ||
+          item.port
+            .toLowerCase()
+            .includes(needle),
+      );
+    }, [
+      deferredQuery,
+      snapshot.contacts,
+    ]);
+
+  const filteredBlockedPeers =
+    useMemo(() => {
+      const needle =
+        deferredQuery
+          .trim()
+          .toLowerCase();
+
+      if (!needle) {
+        return snapshot.blocked;
       }
 
-      if (event.metaKey && event.altKey && (key === "i" || key === "j" || key === "c")) {
-        event.preventDefault();
-      }
-    };
+      return snapshot.blocked.filter(
+        (item) =>
+          (item.name || "")
+            .toLowerCase()
+            .includes(needle) ||
+          item.peer_id
+            .toLowerCase()
+            .includes(needle) ||
+          (item.reason || "")
+            .toLowerCase()
+            .includes(needle),
+      );
+    }, [
+      deferredQuery,
+      snapshot.blocked,
+    ]);
 
-    window.addEventListener("contextmenu", handleContextMenu);
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("scroll", handlePointerDown, true);
+  const sidebarTitle =
+    sidebarView === "chats"
+      ? "Chats"
+      : sidebarView === "contacts"
+        ? "Contacts"
+        : sidebarView === "network"
+          ? "Nearby"
+          : "Black list";
 
-    return () => {
-      window.removeEventListener("contextmenu", handleContextMenu);
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("scroll", handlePointerDown, true);
-    };
-  }, []);
+  const sidebarBadge =
+    sidebarView === "chats"
+      ? `${filteredChats.length}`
+      : sidebarView === "contacts"
+        ? `${filteredContacts.length}`
+        : sidebarView === "network"
+          ? `${
+              filteredOnlineUsers.length +
+              filteredNearbyPeers.length
+            }`
+          : `${filteredBlockedPeers.length}`;
 
-  useEffect(() => {
-    if (!selectedChatId) {
-      return;
-    }
-    pendingScrollBehaviorRef.current = "auto";
-    void refreshMessages(selectedChatId);
-    void markChatRead(selectedChatId).catch(() => undefined);
-  }, [selectedChatId]);
-
-  useEffect(() => {
-    const behavior = pendingScrollBehaviorRef.current;
-    if (!behavior) {
-      return;
-    }
-    const node = messageStreamRef.current;
-    if (!node) {
-      return;
-    }
-    pendingScrollBehaviorRef.current = null;
-    window.requestAnimationFrame(() => {
-      node.scrollTo({
-        top: node.scrollHeight,
-        behavior,
-      });
-    });
-  }, [selectedMessages, selectedChatId]);
-
-  useEffect(() => {
-    if (!selectedChatId) {
-      return;
-    }
-    const exists = visibleChats.some((item) => item.chat_id === selectedChatId);
-    if (!exists) {
-      setSelectedChatId(visibleChats[0]?.chat_id ?? "");
-    }
-  }, [selectedChatId, visibleChats]);
-
-  useEffect(() => {
-    let stop: () => void = () => { };
-    try {
-      stop = listenEvents((event: AppEvent) => {
-        if (event.error) {
-          setError(event.error);
-        }
-        if (event.message) {
-          startTransition(() => {
-            setMessages((current) => {
-              const existing = current[event.message!.chat_id] ?? [];
-              const nextItems = existing.some(
-                (item) => item.message_id && item.message_id === event.message!.message_id,
-              )
-                ? existing
-                : [...existing, event.message!];
-              return {
-                ...current,
-                [event.message!.chat_id]: nextItems.sort((a, b) => a.timestamp - b.timestamp),
-              };
-            });
-          });
-        }
-        if (event.chat) {
-          startTransition(() => {
-            setSnapshot((current) => ({
-              ...current,
-              chats: upsertChat(current.chats, event.chat!),
-            }));
-          });
-        }
-        if (event.type === "peer_discovered" && event.peer) {
-          startTransition(() => {
-            setSnapshot((current) => upsertNeighbor(current, event.peer!));
-          });
-        }
-        if (event.type === "presence_updated" && event.user) {
-          startTransition(() => {
-            setSnapshot((current) => upsertOnlineUser(current, event.user!));
-          });
-        }
-        if (
-          event.type === "contact_added" ||
-          event.type === "contact_updated" ||
-          event.type === "contact_deleted" ||
-          event.type === "peer_blocked" ||
-          event.type === "peer_unblocked" ||
-          event.type === "chat_history_deleted"
-        ) {
-          void refreshBootstrap();
-        }
-      });
-    } catch (err) {
-      setError(describeError(err, "Live updates are unavailable"));
-    }
-    return () => {
-      stop();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!error) {
-      return;
-    }
-    setErrorToastKey((current) => current + 1);
-    const timer = window.setTimeout(() => {
-      setError("");
-    }, 4200);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [error]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const media = window.matchMedia("(prefers-color-scheme: light)");
-    const handleChange = (event: MediaQueryListEvent) => {
-      setSystemTheme(event.matches ? "light" : "dark");
-    };
-
-    setSystemTheme(media.matches ? "light" : "dark");
-    if (typeof media.addEventListener === "function") {
-      media.addEventListener("change", handleChange);
-      return () => media.removeEventListener("change", handleChange);
-    }
-    media.addListener(handleChange);
-    return () => media.removeListener(handleChange);
-  }, []);
-
-  useEffect(() => {
-    writeStorage("syne.theme_preference", themePreference);
-  }, [themePreference]);
-
-  useEffect(() => {
-    writeStorage("syne.notifications_enabled", notificationsEnabled);
-  }, [notificationsEnabled]);
-
-  useEffect(() => {
-    writeStorage("syne.notification_preview", notificationPreview);
-  }, [notificationPreview]);
-
-  useEffect(() => {
-    writeStorage("syne.notification_sound", notificationSound);
-  }, [notificationSound]);
-
-  useEffect(() => {
-    writeStorage("syne.language", appLanguage);
-    if (typeof document !== "undefined") {
-      document.documentElement.lang = appLanguage;
-    }
-  }, [appLanguage]);
-
-  useEffect(() => {
-    writeStorage("syne.app_icon", selectedAppIcon);
-  }, [selectedAppIcon]);
-
-  useEffect(() => () => stopDeleteHistoryHold(), []);
-
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-    document.documentElement.dataset.theme = resolvedTheme;
-    document.documentElement.style.colorScheme = resolvedTheme;
-    const themeMeta = document.querySelector('meta[name="theme-color"]');
-    themeMeta?.setAttribute("content", resolvedTheme === "light" ? "#f3ebdd" : "#0e1117");
-  }, [resolvedTheme]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-    let iconLink = document.querySelector("link[rel='icon']") as HTMLLinkElement | null;
-    if (!iconLink) {
-      iconLink = document.createElement("link");
-      iconLink.rel = "icon";
-      document.head.appendChild(iconLink);
-    }
-    iconLink.href = currentAppIcon.src;
-  }, [currentAppIcon.src]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !isTauri()) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function applyWindowIcon() {
-      try {
-        const iconBytes = await loadRoundedIconBytes(currentAppIcon.src);
-        if (!iconBytes || cancelled) {
-          return;
-        }
-        await invoke("set_app_icon", { iconBytes: Array.from(iconBytes) });
-      } catch (err) {
-        console.warn("Failed to apply app icon", err);
-      }
-
-      try {
-        const icon = await buildWindowIcon(currentAppIcon.src);
-        if (!icon || cancelled) {
-          return;
-        }
-        await getCurrentWindow().setIcon(icon);
-      } catch (err) {
-        console.warn("Failed to apply runtime window icon", err);
-      }
-    }
-
-    void applyWindowIcon();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentAppIcon.src]);
-
-  useEffect(() => {
-    if (!selectedChat) {
-      setPeerNameDraft("");
-      setEditingPeerName(false);
-      setBlockReason("");
-      return;
-    }
-    setPeerNameDraft(selectedContact?.name ?? selectedChat.title);
-    setEditingPeerName(false);
-    setBlockReason("");
-    setEmojiPickerTarget(null);
-    setShowDetailPanel(false);
-  }, [selectedChat, selectedContact]);
+  const searchPlaceholder =
+    sidebarView === "chats"
+      ? "Search chats..."
+      : sidebarView === "contacts"
+        ? "Search contacts..."
+        : sidebarView === "network"
+          ? "Search nearby peers..."
+          : "Search blocked peers...";
 
   async function handleOpenPeer(peerId: string, peerAddr?: string, name?: string) {
     try {
@@ -1314,825 +900,302 @@ export default function App() {
     setChatContextMenu(null);
   }
 
-  // First message date for session separator
-  const firstMsgDate = selectedMessages.length > 0
-    ? formatDate(selectedMessages[0].timestamp)
-    : "";
 
   return (
     <>
       <div className="app-shell">
-        {/* ─── Icon Rail ─── */}
-        <nav className="icon-rail">
-          <div className="emoji-anchor">
-            <button
-              type="button"
-              className="icon-rail-avatar"
-              onClick={() => setEmojiPickerTarget((c) => (c === "self" ? null : "self"))}
-              title="Your avatar"
-            >
-              {selfEmoji}
-            </button>
-            {emojiPickerTarget === "self" ? (
-              <div className="emoji-popover scrollable-emoji">
-                {EMOJI_OPTIONS.map((emoji) => (
-                  <button key={emoji} type="button" className="emoji-option" onClick={() => updateSelfEmoji(emoji)}>
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+        <IconRail
+          sidebarView={sidebarView}
+          showSettings={showSettings}
+          emojiPickerTarget={
+            emojiPickerTarget
+          }
+          selfEmoji={selfEmoji}
+          onEmojiTargetChange={
+            setEmojiPickerTarget
+          }
+          onSelfEmojiChange={
+            updateSelfEmoji
+          }
+          onSidebarViewChange={
+            setSidebarView
+          }
+          onSettings={handleSettings}
+        />
 
-          {/* Chat icon */}
-          <button
-            type="button"
-            className={`icon-rail-btn ${sidebarView === "chats" ? "active" : ""}`}
-            title="Chats"
-            onClick={() => setSidebarView("chats")}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" /></svg>
-          </button>
+        <PeersPanel
+          sidebarView={sidebarView}
+          sidebarTitle={sidebarTitle}
+          sidebarBadge={sidebarBadge}
+          searchPlaceholder={
+            searchPlaceholder
+          }
+          query={query}
+          onQueryChange={setQuery}
+          filteredChats={filteredChats}
+          filteredNearbyPeers={
+            filteredNearbyPeers
+          }
+          filteredOnlineUsers={
+            filteredOnlineUsers
+          }
+          filteredContacts={
+            filteredContacts
+          }
+          filteredBlockedPeers={
+            filteredBlockedPeers
+          }
+          selectedChatId={
+            selectedChatId
+          }
+          onSelectChat={(chatId) => {
+            setChatContextMenu(null);
+            setSelectedChatId(chatId);
+          }}
+          onOpenPeer={(
+            peerId,
+            peerAddr,
+            name,
+          ) => {
+            void handleOpenPeer(
+              peerId,
+              peerAddr,
+              name,
+            );
+          }}
+          onOpenContact={(contact) => {
+            setContactContextMenu(null);
 
-          {/* Network icon */}
-          <button
-            type="button"
-            className={`icon-rail-btn ${sidebarView === "network" ? "active" : ""}`}
-            title="Network"
-            onClick={() => setSidebarView("network")}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m10.586 5.414-5.172 5.172" /><path d="m18.586 13.414-5.172 5.172" /><path d="M6 12h12" /><circle cx="12" cy="20" r="2" /><circle cx="12" cy="4" r="2" /><circle cx="20" cy="12" r="2" /><circle cx="4" cy="12" r="2" /></svg>
-          </button>
-          {/*Contacts icon */}
-          <button
-            type="button"
-            className={`icon-rail-btn ${sidebarView === "contacts" ? "active" : ""}`}
-            title="Contacts"
-            onClick={() => setSidebarView("contacts")}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 2v2" /><path d="M7 22v-2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2" /><path d="M8 2v2" /><circle cx="12" cy="11" r="3" /><rect x="3" y="4" width="18" height="18" rx="2" /></svg>
-          </button>
-          {/* Black list icon */}
-          <button
-            type="button"
-            className={`icon-rail-btn ${sidebarView === "blocked" ? "active" : ""}`}
-            title="Black list"
-            onClick={() => setSidebarView("blocked")}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M4.929 4.929 19.07 19.071" /></svg>
-          </button>
+            void handleOpenPeer(
+              contact.peer_id,
+              joinAddress(
+                contact.ip,
+                contact.port,
+              ),
+              contact.name ||
+                contact.peer_id,
+            );
+          }}
+          onChatContextMenu={
+            handleChatContextMenu
+          }
+          onContactContextMenu={
+            handleContactContextMenu
+          }
+          getPeerAvatar={
+            getPeerAvatar
+          }
+          onUnblock={(peerId) => {
+            void handleUnblock(peerId);
+          }}
+          onNewContact={
+            openManualContactPopover
+          }
+        />
 
-          <div className="icon-rail-spacer" />
-          {/*Settings icon */}
-          <button
-            type="button"
-            className={`icon-rail-btn ${showSettings ? "active" : ""}`}
-            title="Settings"
-            onClick={handleSettings}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings-icon lucide-settings"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></svg>
-          </button>
-
-        </nav>
-
-        {/* ─── Peers Panel ─── */}
-        <aside className="peers-panel">
-          <div className="peers-panel-header">
-            <h2>{sidebarTitle}</h2>
-            <span className="live-badge">{sidebarBadge}</span>
-          </div>
-
-          <div className="peers-panel-search">
-            <input
-              placeholder={searchPlaceholder}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-
-          <div className="peer-list">
-            {sidebarView === "chats" ? (
-              <>
-                {filteredChats.map((chat) => (
-                  <div
-                    key={chat.chat_id}
-                    className="chat-list-row"
-                  >
-                    <button
-                      className={`peer-card ${chat.chat_id === selectedChatId ? "active" : ""}`}
-                      onContextMenu={(event) => handleChatContextMenu(event, chat.chat_id)}
-                      onClick={() => {
-                        setChatContextMenu(null);
-                        setSelectedChatId(chat.chat_id);
-                      }}
-                    >
-                      <div className={`peer-card-avatar ${chat.blocked ? "blocked" : chat.online ? "online" : ""}`}>
-                        {getPeerAvatar(chat.peer_id, chat.title || chat.peer_id)}
-                      </div>
-                      <div className="peer-card-info">
-                        <div className="peer-card-info-top">
-                          <strong>{chat.title || chat.peer_id}</strong>
-                          <time>{formatTime(chat.last_timestamp)}</time>
-                        </div>
-                        <div className="peer-card-info-bottom">
-                          <span>{chat.preview || (chat.online ? "Encrypted Stream" : "Last seen: recently")}</span>
-                          {chat.unread_count > 0 ? (
-                            <span className="unread-badge">{chat.unread_count}</span>
-                          ) : chat.blocked ? (
-                            <span className="live-tag blocked">blocked</span>
-                          ) : chat.online ? (
-                            <span className="live-tag">live</span>
-                          ) : (
-                            <span className="offline-tag">offline</span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                ))}
-                {!filteredChats.length ? (
-                  <div className="empty-state compact">No chats yet.</div>
-                ) : null}
-              </>
-            ) : null}
-
-            {sidebarView === "network" ? (
-              <>
-                {filteredOnlineUsers.map((user) => (
-                  <button
-                    key={`user-${user.user_id}`}
-                    className="peer-card"
-                    disabled
-                  >
-                    <div className="peer-card-avatar online">
-                      {getPeerAvatar(user.user_id, user.name || user.user_id)}
-                    </div>
-                    <div className="peer-card-info">
-                      <div className="peer-card-info-top">
-                        <strong>{user.name || user.user_id}</strong>
-                      </div>
-                      <div className="peer-card-info-bottom">
-                        <span>{user.user_id}</span>
-                        <span className="live-tag">live</span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                {filteredNearbyPeers.map((peer) => (
-                  <button
-                    key={peer.peer_id}
-                    className="peer-card"
-                    onClick={() => handleOpenPeer(peer.peer_id, peer.addr, peer.name || peer.peer_id)}
-                  >
-                    <div className={`peer-card-avatar ${peer.blocked ? "blocked" : "online"}`}>
-                      {getPeerAvatar(peer.peer_id, peer.name || peer.peer_id)}
-                    </div>
-                    <div className="peer-card-info">
-                      <div className="peer-card-info-top">
-                        <strong>{peer.name || peer.peer_id}</strong>
-                      </div>
-                      <div className="peer-card-info-bottom">
-                        <span>{peer.addr}</span>
-                        <span className={`live-tag ${peer.blocked ? "blocked" : ""}`}>
-                          {peer.blocked ? "blocked" : "live"}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                {!filteredOnlineUsers.length && !filteredNearbyPeers.length ? (
-                  <div className="empty-state compact">No nearby peers.</div>
-                ) : null}
-              </>
-            ) : null}
-
-            {sidebarView === "contacts" ? (
-              <>
-                {filteredContacts.map((contact) => (
-                  <div key={contact.peer_id} className="chat-list-row">
-                    <button
-                      className="peer-card"
-                      onContextMenu={(event) => handleContactContextMenu(event, contact.peer_id)}
-                      onClick={() => {
-                        setContactContextMenu(null);
-                        void handleOpenPeer(
-                          contact.peer_id,
-                          joinAddress(contact.ip, contact.port),
-                          contact.name || contact.peer_id,
-                        );
-                      }}
-                    >
-                      <div className="peer-card-avatar">
-                        {getPeerAvatar(contact.peer_id, contact.name || contact.peer_id)}
-                      </div>
-                      <div className="peer-card-info">
-                        <div className="peer-card-info-top">
-                          <strong>{contact.name || contact.peer_id}</strong>
-                        </div>
-                        <div className="peer-card-info-bottom">
-                          <span>{contact.ip}:{contact.port}</span>
-                          <span className="live-tag">saved</span>
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                ))}
-                {!filteredContacts.length ? (
-                  <div className="empty-state compact">No contacts yet.</div>
-                ) : null}
-              </>
-            ) : null}
-
-            {sidebarView === "blocked" ? (
-              <>
-                <div className="sidebar-blocked-list">
-                  {filteredBlockedPeers.map((item) => (
-                    <div key={item.peer_id} className="blocked-item sidebar-blocked-item">
-                      <div className="blocked-info">
-                        <strong>{item.name || "Unknown"}</strong>
-                        <span>{item.reason || item.peer_id}</span>
-                      </div>
-                      <button className="ghost-tiny" onClick={() => void handleUnblock(item.peer_id)}>
-                        Unblock
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                {!filteredBlockedPeers.length ? (
-                  <div className="empty-state compact">Black list is empty.</div>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-
-          {sidebarView === "chats" || sidebarView === "contacts" ? (
-            <div className="peers-panel-footer">
-              <button type="button" className="new-contact-button" onClick={openManualContactPopover}>
-                + New contact
-              </button>
-            </div>
-          ) : null}
-        </aside>
-
-        {/* ─── Main Chat Area ─── */}
-        <div className="main-chat main-chat-layout">
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            {/* Chat Header */}
-            <div className="chat-header">
-              <div className="chat-header-left">
-                <div className="chat-header-title">
-                  {selectedChat ? (
-                    <button
-                      type="button"
-                      className="chat-header-name"
-                      onClick={() => setShowDetailPanel((value) => !value)}
-                    >
-                      {selectedChat.title}
-                    </button>
-                  ) : (
-                    <h2>Select a chat</h2>
-                  )}
-                  {selectedChat ? (
-                    <div
-                      className={
-                        selectedChat.blocked
-                          ? "blocked-dot"
-                          : selectedChat.online
-                            ? "online-dot"
-                            : "offline-dot"
-                      }
-                    />
-                  ) : null}
-                </div>
-              </div>
-              <div className="chat-header-right">
-                {selectedChat ? (
-                  <>
-                    {!selectedContact && (
-                      <button className="header-btn" onClick={prefillFromCurrentPeer}>
-                        + Add Contact
-                      </button>
-                    )}
-                    <button
-                      className="kebab-btn"
-                      onClick={() => setShowDetailPanel((v) => !v)}
-                      title="Toggle peer details"
-                    >
-                      ⋮
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            </div>
-
-            {/* Messages */}
-            <section style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {loading ? (
-                <div className="empty-state">
-                  <div>
-                    <h3>Connecting to backend</h3>
-                    <p>The Tauri shell expects the Go bridge at {getApiBase()}.</p>
-                  </div>
-                </div>
-              ) : selectedChat ? (
-                <>
-                  <div ref={messageStreamRef} className="message-stream">
-                    {/* Session separator */}
-                    {firstMsgDate && (
-                      <div className="session-separator">
-                        <span>{firstMsgDate}</span>
-                      </div>
-                    )}
-
-                    {selectedMessages.map((message) => (
-                      <div
-                        key={message.message_id ?? `${message.timestamp}-${message.from}`}
-                        className={`msg-row ${message.direction}`}
-                      >
-                        <div className={`msg-content ${message.direction}`}>
-                          <div className={`msg-bubble ${message.direction}`}>
-                            <p className="msg-text">{message.text}</p>
-                            <div className="msg-meta">
-                              <span className="msg-time">{formatTime(message.timestamp)}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-
-                    {!selectedMessages.length ? (
-                      <div className="empty-state">
-                        <div>
-                          <h3>Chat is open</h3>
-                          <p>Handshake is ready. Send the first message.</p>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* Composer */}
-                  <div className="composer">
-                    <div className="composer-input-row">
-                      <textarea
-                        placeholder="Type a message or drop a file..."
-                        value={composer}
-                        onChange={(e) => setComposer(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            void handleSend();
-                          }
-                        }}
-                      />
-                      <button className="send-btn" onClick={() => void handleSend()} title="Send">
-                        ➤
-                      </button>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state">
-                  <div>
-                    <h3>No active conversation</h3>
-                    <p>Pick a chat or open a nearby peer from the panel.</p>
-                  </div>
-                </div>
-              )}
-            </section>
-          </div>
-
-          {/* ─── Detail Panel (right side, togglable) ─── */}
-          {selectedChat && showDetailPanel ? (
-            <aside className="detail-panel">
-              <div className="detail-banner" />
-
-              <div className="detail-hero">
-                <div className="emoji-anchor">
-                  <button
-                    type="button"
-                    className="detail-avatar"
-                    onClick={() => setEmojiPickerTarget((c) => (c === "peer" ? null : "peer"))}
-                  >
-                    {selectedPeerEmoji}
-                    <div
-                      className={`status-indicator ${selectedChat.blocked ? "blocked" : selectedChat.online ? "online" : ""
-                        }`}
-                    />
-                  </button>
-                  {emojiPickerTarget === "peer" ? (
-                    <div className="emoji-popover scrollable-emoji">
-                      {EMOJI_OPTIONS.map((emoji) => (
-                        <button key={emoji} type="button" className="emoji-option" onClick={() => updatePeerEmoji(emoji)}>
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="detail-name-block">
-                  {editingPeerName ? (
-                    <input
-                      className="inline-name-input"
-                      value={peerNameDraft}
-                      autoFocus
-                      onChange={(e) => setPeerNameDraft(e.target.value)}
-                      onBlur={() => void handleCommitPeerName()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleCommitPeerName();
-                        }
-                        if (e.key === "Escape") {
-                          setEditingPeerName(false);
-                          setPeerNameDraft(selectedContact?.name ?? selectedChat.title);
-                        }
-                      }}
-                    />
-                  ) : (
-                    <button type="button" className="editable-name" onClick={() => setEditingPeerName(true)}>
-                      {selectedChat.title}
-                    </button>
-                  )}
-                  <p className="peer-id-subtextline">@{selectedChat.peer_id.slice(0, 8)}...</p>
-                </div>
-              </div>
-
-              <div className="detail-content">
-                <div className="detail-divider" />
-
-                <div className="info-section">
-                  <span className="section-label">PEER ID</span>
-                  <div className="id-copy-box" onClick={() => navigator.clipboard.writeText(selectedChat.peer_id)}>
-                    <code>{selectedChat.peer_id}</code>
-                  </div>
-                </div>
-
-                {selectedAddr && (
-                  <div className="info-section">
-                    <span className="section-label">ADDRESS</span>
-                    <div className="id-copy-box" onClick={() => navigator.clipboard.writeText(selectedAddr)}>
-                      <code>{selectedAddr}</code>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="detail-footer">
-                <div className="inline-block-form">
-                  <input
-                    placeholder="Reason..."
-                    value={blockReason}
-                    onChange={(e) => setBlockReason(e.target.value)}
-                  />
-                  <button className="danger-btn" onClick={() => void handleBlock()}>
-                    Block
-                  </button>
-                </div>
-              </div>
-            </aside>
-          ) : null}
-        </div>
+        <ChatArea
+          selectedChat={selectedChat}
+          selectedContact={
+            selectedContact
+          }
+          selectedPeerEmoji={
+            selectedPeerEmoji
+          }
+          selectedAddr={selectedAddr}
+          selectedMessages={
+            selectedMessages
+          }
+          loading={loading}
+          apiBase={getApiBase()}
+          showDetailPanel={
+            showDetailPanel
+          }
+          setShowDetailPanel={
+            setShowDetailPanel
+          }
+          emojiPickerTarget={
+            emojiPickerTarget
+          }
+          editingPeerName={
+            editingPeerName
+          }
+          peerNameDraft={
+            peerNameDraft
+          }
+          blockReason={blockReason}
+          saving={saving}
+          composer={composer}
+          messageStreamRef={
+            messageStreamRef
+          }
+          onAddContact={
+            prefillFromCurrentPeer
+          }
+          onComposerChange={
+            setComposer
+          }
+          onSend={() => {
+            void handleSend();
+          }}
+          onEmojiTargetChange={
+            setEmojiPickerTarget
+          }
+          onPeerEmojiChange={
+            updatePeerEmoji
+          }
+          onPeerNameEditing={
+            setEditingPeerName
+          }
+          onPeerNameDraftChange={
+            setPeerNameDraft
+          }
+          onCommitPeerName={() => {
+            void handleCommitPeerName();
+          }}
+          onBlockReasonChange={
+            setBlockReason
+          }
+          onBlock={() => {
+            void handleBlock();
+          }}
+        />
       </div>
-      {/* ─── Settings Popover (modal) ─── */}
+
       {showSettings ? (
-        <>
-          <div className="contact-popover-backdrop" onClick={closeSettings} />
-          <div className="settings-popover" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-            <div className="settings-popover-head">
-              <div className="settings-popover-title">
-                {activeSettingsItem ? (
-                  <button
-                    type="button"
-                    className="ghost-tiny"
-                    onClick={() => setActiveSettingsSection(null)}
-                  >
-                    {t("settings.back")}
-                  </button>
-                ) : (
-                  <span className="settings-popover-kicker">{t("settings.preferences")}</span>
-                )}
-                <h2 id="settings-title">
-                  {activeSettingsItem
-                    ? `${activeSettingsItem.icon} ${t(activeSettingsItem.labelKey)}`
-                    : t("settings.title")}
-                </h2>
-              </div>
-              <button type="button" className="ghost-tiny" onClick={closeSettings}>
-                {t("settings.close")}
-              </button>
-            </div>
+        <SettingsPopover
+          activeSettingsSection={
+            activeSettingsSection
+          }
+          showDeleteHistoryConfirm={
+            showDeleteHistoryConfirm
+          }
+          notificationsEnabled={
+            notificationsEnabled
+          }
+          notificationPreview={
+            notificationPreview
+          }
+          notificationSound={
+            notificationSound
+          }
+          appLanguage={appLanguage}
+          themePreference={
+            themePreference
+          }
+          resolvedTheme={
+            resolvedTheme
+          }
+          selectedAppIcon={
+            selectedAppIcon
+          }
+          currentAppIcon={
+            currentAppIcon
+          }
+          deleteHoldProgress={
+            deleteHoldProgress
+          }
+          deletingHistory={
+            deletingHistory
+          }
+          t={t}
+          onClose={closeSettings}
+          onSectionChange={
+            setActiveSettingsSection
+          }
+          onNotificationsEnabledChange={
+            setNotificationsEnabled
+          }
+          onNotificationPreviewChange={
+            setNotificationPreview
+          }
+          onNotificationSoundChange={
+            setNotificationSound
+          }
+          onLanguageChange={
+            setAppLanguage
+          }
+          onThemeChange={
+            setThemePreference
+          }
+          onAppIconChange={
+            setSelectedAppIcon
+          }
+          onOpenDeleteHistoryConfirm={() =>
+            setShowDeleteHistoryConfirm(
+              true,
+            )
+          }
+          onCancelDeleteHistory={() => {
+            stopDeleteHistoryHold();
 
-            {activeSettingsItem ? (
-              activeSettingsSection === "notifications" ? (
-                <div className="settings-panel">
-                  <section className="settings-section-card">
-                    <label className="settings-toggle-row">
-                      <span>
-                        <strong>{t("notifications.enabled")}</strong>
-                        <small>{t("notifications.enabledMeta")}</small>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={notificationsEnabled}
-                        onChange={(event) => setNotificationsEnabled(event.target.checked)}
-                      />
-                    </label>
-                    <label className="settings-toggle-row">
-                      <span>
-                        <strong>{t("notifications.preview")}</strong>
-                        <small>{t("notifications.previewMeta")}</small>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={notificationPreview}
-                        disabled={!notificationsEnabled}
-                        onChange={(event) => setNotificationPreview(event.target.checked)}
-                      />
-                    </label>
-                    <label className="settings-field">
-                      <span>{t("notifications.sound")}</span>
-                      <select
-                        value={notificationSound}
-                        disabled={!notificationsEnabled}
-                        onChange={(event) => setNotificationSound(event.target.value as NotificationSound)}
-                      >
-                        {NOTIFICATION_SOUND_OPTIONS.map((sound) => (
-                          <option key={sound.id} value={sound.id}>
-                            {sound.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </section>
-                </div>
-              ) : activeSettingsSection === "language" ? (
-                <div className="settings-panel">
-                  <section className="settings-section-card">
-                    <div className="appearance-section-head">
-                      <span className="appearance-section-label">{t("language.current")}</span>
-                      <span className="appearance-section-meta">
-                        {LANGUAGE_OPTIONS.find((item) => item.id === appLanguage)?.label}
-                      </span>
-                    </div>
-                    <div className="language-grid">
-                      {LANGUAGE_OPTIONS.map((language) => (
-                        <button
-                          key={language.id}
-                          type="button"
-                          className={`appearance-choice ${appLanguage === language.id ? "active" : ""}`}
-                          onClick={() => setAppLanguage(language.id)}
-                        >
-                          {language.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-              ) : activeSettingsSection === "appearance" ? (
-                <div className="appearance-panel">
-                  <section className="appearance-section">
-                    <div className="appearance-section-head">
-                      <span className="appearance-section-label">{t("appearance.theme")}</span>
-                      <span className="appearance-section-meta">{resolvedTheme}</span>
-                    </div>
-                    <div className="appearance-theme-grid">
-                      {THEME_OPTIONS.map((theme) => (
-                        <button
-                          key={theme.id}
-                          type="button"
-                          className={`appearance-choice ${themePreference === theme.id ? "active" : ""}`}
-                          onClick={() => setThemePreference(theme.id)}
-                        >
-                          {theme.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="appearance-section">
-                    <div className="appearance-section-head">
-                      <span className="appearance-section-label">{t("appearance.icon")}</span>
-                      <span className="appearance-section-meta">{currentAppIcon.label}</span>
-                    </div>
-                    <div className="appearance-icon-current">
-                      <img src={currentAppIcon.src} alt={currentAppIcon.label} className="appearance-icon-current-image" />
-                      <div className="appearance-icon-current-copy">
-                        <strong>{currentAppIcon.label}</strong>
-                        <span>{t("appearance.saved")}</span>
-                      </div>
-                    </div>
-                    <div className="appearance-icon-grid">
-                      {APP_ICON_OPTIONS.map((icon) => (
-                        <button
-                          key={icon.id}
-                          type="button"
-                          className={`appearance-icon-card ${selectedAppIcon === icon.id ? "active" : ""}`}
-                          onClick={() => setSelectedAppIcon(icon.id)}
-                        >
-                          <img src={icon.src} alt={icon.label} className="appearance-icon-image" />
-                          <span>{icon.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-              ) : activeSettingsSection === "delete-history" ? (
-                <div className="settings-panel">
-                  <section className="settings-section-card danger-settings-card">
-                    <div className="settings-danger-copy">
-                      <strong>{t("deleteHistory.title")}</strong>
-                      <span>{t("deleteHistory.description")}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="danger-wide-btn"
-                      onClick={() => setShowDeleteHistoryConfirm(true)}
-                    >
-                      {t("deleteHistory.openConfirm")}
-                    </button>
-                  </section>
-                </div>
-              ) : (
-                <div className="settings-panel-empty" />
-              )
-            ) : (
-              <div className="settings-menu">
-                {SETTINGS_SECTIONS.map((section) => (
-                  <button
-                    key={section.id}
-                    type="button"
-                    className="settings-menu-item"
-                    onClick={() => setActiveSettingsSection(section.id)}
-                  >
-                    <span>{section.icon} {t(section.labelKey)}</span>
-                    <span className="settings-menu-arrow" aria-hidden="true">›</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          {showDeleteHistoryConfirm ? (
-            <div className="confirm-dialog" role="alertdialog" aria-modal="true">
-              <div className="confirm-dialog-copy">
-                <strong>{t("deleteHistory.confirmTitle")}</strong>
-                <span>{t("deleteHistory.confirmDescription")}</span>
-              </div>
-              <div className="confirm-dialog-actions">
-                <button
-                  type="button"
-                  className="ghost-tiny"
-                  onClick={() => {
-                    stopDeleteHistoryHold();
-                    setShowDeleteHistoryConfirm(false);
-                  }}
-                  disabled={deletingHistory}
-                >
-                  {t("deleteHistory.cancel")}
-                </button>
-                <button
-                  type="button"
-                  className="hold-confirm-btn"
-                  style={{ "--hold-progress": deleteHoldProgress } as CSSProperties}
-                  onPointerDown={startDeleteHistoryHold}
-                  onPointerUp={stopDeleteHistoryHold}
-                  onPointerLeave={stopDeleteHistoryHold}
-                  onPointerCancel={stopDeleteHistoryHold}
-                  disabled={deletingHistory}
-                >
-                  <span>{deleteHoldProgress > 0 ? t("deleteHistory.hold") : t("deleteHistory.confirm")}</span>
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </>
+            setShowDeleteHistoryConfirm(
+              false,
+            );
+          }}
+          onStartDeleteHistoryHold={
+            startDeleteHistoryHold
+          }
+          onStopDeleteHistoryHold={
+            stopDeleteHistoryHold
+          }
+        />
       ) : null}
-      {/* ─── Contact Popover (modal) ─── */}
+
       {showNewContactPopover ? (
-        <>
-          <div className="contact-popover-backdrop" onClick={() => setShowNewContactPopover(false)} />
-          <div className="contact-popover">
-            <div className="popover-head">
-              <h2>Add friend</h2>
-              <button type="button" className="ghost-tiny" onClick={() => setShowNewContactPopover(false)}>
-                Close
-              </button>
-            </div>
-            <div className="popover-form">
-              <label>
-                <span>Your 6-digit code</span>
-                <input value={inviteCode?.code ?? "Loading..."} readOnly />
-              </label>
-              <label>
-                <span>Friend code</span>
-                <input
-                  value={invitePeerIdDraft}
-                  placeholder="123456"
-                  onChange={(e) => setInvitePeerIdDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void handleOpenInvitePeer();
-                    }
-                  }}
-                />
-              </label>
-            </div>
-            <div className="popover-form">
-              <label>
-                <span>Display Name</span>
-                <input
-                  value={contactForm.name}
-                  onChange={(e) => setContactForm((c) => ({ ...c, name: e.target.value }))}
-                />
-              </label>
-              <label>
-                <span>IP</span>
-                <input
-                  value={contactForm.ip}
-                  onChange={(e) => setContactForm((c) => ({ ...c, ip: e.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Peer ID</span>
-                <input
-                  value={contactForm.peer_id}
-                  onChange={(e) => setContactForm((c) => ({ ...c, peer_id: e.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Port</span>
-                <input
-                  value={contactForm.port}
-                  onChange={(e) => setContactForm((c) => ({ ...c, port: e.target.value }))}
-                />
-              </label>
-            </div>
-            <div className="action-row">
-              <button className="ghost" disabled={!invitePeerIdDraft || saving} onClick={() => void handleOpenInvitePeer()}>
-                Open by code
-              </button>
-              <button className="ghost" disabled={!selectedChat} onClick={prefillFromCurrentPeer}>
-                Use current peer
-              </button>
-              <button className="primary" disabled={saving} onClick={() => void handleSaveContact()}>
-                Save contact
-              </button>
-            </div>
-          </div>
-        </>
-      ) : null}
-
-      {/* ─── Error Toast ─── */}
-      {error ? (
-        <div
-          key={errorToastKey}
-          className="error-toast"
-          role="alert"
-          aria-live="assertive"
-        >
-          <span className="error-toast-title">Error</span>
-          <p>{error}</p>
-        </div>
-      ) : null}
-
-      {chatContextMenu ? (
-        <div
-          className="chat-context-menu"
-          style={{
-            top: Math.max(16, chatContextMenu.y),
-            left: Math.max(16, chatContextMenu.x),
+        <ContactPopover
+          contactForm={contactForm}
+          inviteCode={inviteCode}
+          invitePeerIdDraft={
+            invitePeerIdDraft
+          }
+          saving={saving}
+          selectedChat={selectedChat}
+          onClose={() =>
+            setShowNewContactPopover(
+              false,
+            )
+          }
+          onInvitePeerIdChange={
+            setInvitePeerIdDraft
+          }
+          onContactFormChange={
+            setContactForm
+          }
+          onOpenInvitePeer={() => {
+            void handleOpenInvitePeer();
           }}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="chat-context-menu-item danger"
-            onClick={() => handleHideChat(chatContextMenu.chatId)}
-          >
-            Удалить чат 🗑️
-          </button>
-        </div>
+          onPrefillCurrentPeer={
+            prefillFromCurrentPeer
+          }
+          onSaveContact={() => {
+            void handleSaveContact();
+          }}
+        />
       ) : null}
 
-      {contactContextMenu ? (
-        <div
-          className="chat-context-menu"
-          style={{
-            top: Math.max(16, contactContextMenu.y),
-            left: Math.max(16, contactContextMenu.x),
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="chat-context-menu-item danger"
-            onClick={() => void handleDeleteContact(contactContextMenu.peerId)}
-          >
-            Удалить контакт 🗑️
-          </button>
-        </div>
-      ) : null}
+      <ErrorToast
+        error={error}
+        errorToastKey={
+          errorToastKey
+        }
+      />
+
+      <ContextMenus
+        chatContextMenu={
+          chatContextMenu
+        }
+        contactContextMenu={
+          contactContextMenu
+        }
+        onHideChat={
+          handleHideChat
+        }
+        onDeleteContact={(peerId) => {
+          void handleDeleteContact(
+            peerId,
+          );
+        }}
+      />
     </>
   );
 }

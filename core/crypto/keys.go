@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
 
@@ -68,7 +69,9 @@ func DeriveLoginKey(password string, salt []byte) []byte {
 func DerivePasswordHash(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, 32)
 }
-
+func GenerateIdentityKeyPair() (*ecdh.PrivateKey, error) {
+	return ecdh.X25519().GenerateKey(rand.Reader)
+}
 func GenerateSalt() ([]byte, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {

@@ -6,6 +6,8 @@ import (
 	"Syne/core/history"
 	p2ptransport "Syne/core/transport/p2p"
 	"context"
+	"crypto/ecdh"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -40,11 +42,13 @@ type Snapshot struct {
 	Chats     []ChatSummary          `json:"chats"`
 }
 type UserSession struct {
-	UserID    string
-	SessionID string
-	MasterKey []byte
-	FName     string
-	SName     string
+	UserID             string
+	SessionID          string
+	MasterKey          []byte
+	IdentityPrivateKey []byte
+	IdentityPublicKey  []byte
+	FName              string
+	SName              string
 }
 type PeerPresence struct {
 	PeerID   string `json:"peer_id"`
@@ -108,12 +112,13 @@ type Service struct {
 	identity *corecrypto.Identity
 	node     *p2ptransport.Node
 
-	stateMu    sync.RWMutex
-	neighbors  map[string]PeerPresence
-	seen       map[string]time.Time
-	seenOrder  []string
-	unread     map[string]int
-	rateStates map[string]*rateState
+	stateMu      sync.RWMutex
+	neighbors    map[string]PeerPresence
+	identityKeys map[string][]byte
+	seen         map[string]time.Time
+	seenOrder    []string
+	unread       map[string]int
+	rateStates   map[string]*rateState
 
 	subMu       sync.RWMutex
 	subscribers map[chan Event]struct{}
@@ -136,17 +141,80 @@ func New(config Config) (*Service, error) {
 			Port:       config.Port,
 			ServerAddr: config.ServerAddr,
 		},
-		ctx:         ctx,
-		cancel:      cancel,
-		identity:    identity,
-		neighbors:   make(map[string]PeerPresence),
-		seen:        make(map[string]time.Time),
-		unread:      make(map[string]int),
-		rateStates:  make(map[string]*rateState),
-		subscribers: make(map[chan Event]struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
+		identity:     identity,
+		neighbors:    make(map[string]PeerPresence),
+		identityKeys: make(map[string][]byte),
+		seen:         make(map[string]time.Time),
+		unread:       make(map[string]int),
+		rateStates:   make(map[string]*rateState),
+		subscribers:  make(map[chan Event]struct{}),
 	}, nil
 }
+func (s *Service) resolveIdentityKey(peerID string) ([]byte, error) {
+	s.stateMu.RLock()
+	if key, ok := s.identityKeys[peerID]; ok {
+		s.stateMu.RUnlock()
+		return key, nil
+	}
+	s.stateMu.RUnlock()
 
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	resp, err := s.node.GetIdentityKey(ctx, peerID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve identity key for peer %s: %w", peerID, err)
+	}
+
+	s.stateMu.Lock()
+	s.identityKeys[peerID] = resp.IdentityPublicKey
+	s.stateMu.Unlock()
+
+	return resp.IdentityPublicKey, nil
+}
+func (s *Service) deriveChatKeyWith(peerID, chatID string, session *UserSession) ([]byte, error) {
+	// 1. Пробуем локальный кэш — работает офлайн.
+	wrapped, err := history.LoadChatKey(chatID)
+	if err == nil {
+		return corecrypto.UnwrapKey(wrapped, session.MasterKey)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load cached chat key: %w", err)
+	}
+
+	// 2. Ключа ещё нет — вычисляем через сеть (нужен собеседник онлайн).
+	remotePubBytes, err := s.resolveIdentityKey(peerID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve remote identity key: %w", err)
+	}
+
+	localPriv, err := ecdh.X25519().NewPrivateKey(session.IdentityPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("parse local identity key: %w", err)
+	}
+
+	remotePub, err := ecdh.X25519().NewPublicKey(remotePubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse remote identity key: %w", err)
+	}
+
+	chatKey, err := corecrypto.DeriveChatKey(localPriv, remotePub, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("derive chat key: %w", err)
+	}
+
+	// 3. Сохраняем в кэш на будущее — теперь офлайн-доступ работает.
+	wrappedNew, err := corecrypto.WrapKey(chatKey, session.MasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("wrap chat key for cache: %w", err)
+	}
+	if err := history.SaveChatKey(chatID, wrappedNew); err != nil {
+		return nil, fmt.Errorf("save chat key to cache: %w", err)
+	}
+
+	return chatKey, nil
+}
 func (s *Service) CurrentUserInfo() (userID, fname, sname string, ok bool) {
 	s.sessionMu.RLock()
 	defer s.sessionMu.RUnlock()
@@ -183,6 +251,7 @@ func (s *Service) Start() error {
 		}
 	}
 	s.node.SetWhoAmIHandler(s)
+	s.node.SetIdentityKeyHandler(s)
 	s.wg.Add(1)
 	go s.retryOutboxLoop()
 	return nil
@@ -247,11 +316,13 @@ func (s *Service) Login(login, password string) error {
 	}
 	s.sessionMu.Lock()
 	s.session = &UserSession{
-		UserID:    login,
-		SessionID: result.SessionID,
-		MasterKey: result.MasterKey,
-		FName:     result.FName,
-		SName:     result.SName,
+		UserID:             login,
+		SessionID:          result.SessionID,
+		MasterKey:          result.MasterKey,
+		IdentityPrivateKey: result.IdentityPrivateKey,
+		IdentityPublicKey:  result.IdentityPublicKey,
+		FName:              result.FName,
+		SName:              result.SName,
 	}
 	s.sessionMu.Unlock()
 	s.emit(Event{
@@ -275,6 +346,14 @@ func (s *Service) currentSession() (*UserSession, error) {
 	}
 	return s.session, nil
 
+}
+func (s *Service) CurrentIdentityPublicKey() ([]byte, bool) {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	if s.session == nil {
+		return nil, false
+	}
+	return s.session.IdentityPublicKey, true
 }
 func (s *Service) Logout() error {
 	defer s.sessionMu.Unlock()
@@ -313,19 +392,31 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	wrapped, err := history.LoadChatKey(chatID)
+	if err != nil {
+		return nil, fmt.Errorf("chat key not found, cannot decrypt history: %w", err)
+	}
+	chatKey, err := corecrypto.UnwrapKey(wrapped, session.MasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt chat key: %w", err)
+	}
 	messages := make([]UIMessage, 0, len(items))
 	for _, item := range items {
+		plaintext, err := corecrypto.UnwrapKey(item.Payload, chatKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt message %s: %w", item.MessageID, err)
+		}
 		direction := "incoming"
 		if item.From == session.UserID {
 			direction = "outgoing"
 		}
+
 		messages = append(messages, UIMessage{
 			MessageID: item.MessageID,
 			ChatID:    item.ChatID,
 			TargetID:  item.TargetID,
 			From:      item.From,
-			Text:      string(item.Payload),
+			Text:      string(plaintext),
 			Timestamp: item.Timestamp,
 			Direction: direction,
 			Strategy:  item.Strategy.String(),
@@ -411,7 +502,15 @@ func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
 	}
 
 	chatID := privateChatID(session.UserID, targetUserID)
+	chatKey, err := s.deriveChatKeyWith(targetPeerID, chatID, session)
+	if err != nil {
+		return UIMessage{}, fmt.Errorf("derive chat key: %w", err)
+	}
 
+	encryptedPayload, err := corecrypto.WrapKey([]byte(text), chatKey)
+	if err != nil {
+		return UIMessage{}, fmt.Errorf("encrypt message: %w", err)
+	}
 	msg := protocol.Message{
 		Version:   protocol.ProtocolVersion,
 		Type:      protocol.MsgChat,
@@ -421,7 +520,7 @@ func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
 		TargetID:  targetPeerID,
 		ChatID:    chatID,
 		From:      session.UserID,
-		Payload:   []byte(text),
+		Payload:   encryptedPayload,
 		Timestamp: time.Now().UnixMilli(),
 	}
 	if err := msg.Sign(s.identity.PrivateKey); err != nil {
@@ -740,6 +839,22 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 			_ = s.node.SendHop(s.ctx, msg, sender.ID.String())
 			return
 		}
+		session, err := s.currentSession()
+		if err != nil {
+			return // не залогинены — не можем расшифровать, просто игнорируем сообщение
+		}
+
+		chatKey, err := s.deriveChatKeyWith(sender.ID.String(), msg.ChatID, session)
+		if err != nil {
+			s.emitError(fmt.Errorf("derive chat key: %w", err))
+			return
+		}
+
+		plaintext, err := corecrypto.UnwrapKey(msg.Payload, chatKey)
+		if err != nil {
+			s.emitError(fmt.Errorf("decrypt message: %w", err))
+			return
+		}
 		if err := history.SaveMessage(msg); err != nil {
 			s.emitError(err)
 			return
@@ -748,7 +863,7 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 			ChatID:        msg.ChatID,
 			PeerID:        sender.ID.String(),
 			Title:         s.lookupPeerTitle(sender.ID.String()),
-			LastMessage:   string(msg.Payload),
+			LastMessage:   string(plaintext),
 			LastTimestamp: msg.Timestamp,
 		}); err != nil {
 			s.emitError(err)
@@ -763,7 +878,7 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 			ChatID:    msg.ChatID,
 			TargetID:  msg.TargetID,
 			From:      msg.From,
-			Text:      string(msg.Payload),
+			Text:      string(plaintext),
 			Timestamp: msg.Timestamp,
 			Direction: "incoming",
 			Strategy:  msg.Strategy.String(),
@@ -1065,11 +1180,16 @@ func (s *Service) retryDueOutbox() {
 			Payload:   item.Payload,
 			Timestamp: item.CreatedAt,
 		}
+		msg.ID = item.MessageID
+
 		if err := msg.Sign(s.identity.PrivateKey); err != nil {
-			_ = history.UpdateOutboxFailure(item.MessageID, err.Error(), time.Now().Add(30*time.Second).UnixMilli())
+			_ = history.UpdateOutboxFailure(
+				item.MessageID,
+				err.Error(),
+				time.Now().Add(30*time.Second).UnixMilli(),
+			)
 			continue
 		}
-		msg.ID = item.MessageID
 		strategy, err := s.routeMessage(msg)
 		if err != nil {
 			_ = history.UpdateOutboxFailure(item.MessageID, err.Error(), time.Now().Add(30*time.Second).UnixMilli())

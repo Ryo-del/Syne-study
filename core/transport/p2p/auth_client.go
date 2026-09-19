@@ -13,10 +13,12 @@ import (
 )
 
 type LoginResult struct {
-	SessionID string
-	MasterKey []byte
-	FName     string
-	SName     string
+	SessionID          string
+	MasterKey          []byte
+	IdentityPrivateKey []byte
+	IdentityPublicKey  []byte
+	FName              string
+	SName              string
 }
 
 func (n *Node) dialServer(ctx context.Context, serverAddr string) (peer.ID, error) {
@@ -75,21 +77,33 @@ func (n *Node) Register(
 	if _, err := rand.Read(masterKey); err != nil {
 		return nil, fmt.Errorf("generate master key: %w", err)
 	}
+	identityKey, err := crypto.GenerateIdentityKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generate identity key pair: %w", err)
+	}
 
+	identityPublicKey := identityKey.PublicKey().Bytes()
+	identityPrivateKeyBytes := identityKey.Bytes()
+	encryptedIdentityKey, err := crypto.WrapKey(identityPrivateKeyBytes, loginKey)
+	if err != nil {
+		return nil, fmt.Errorf("wrap identity key: %w", err)
+	}
 	encryptedMasterKey, err := crypto.WrapKey(masterKey, loginKey)
 	if err != nil {
 		return nil, fmt.Errorf("wrap master key: %w", err)
 	}
 
 	request := protocol.RegisterRequest{
-		Type:               protocol.AuthTypeRegisterRequest,
-		Login:              login,
-		FName:              fname,
-		SName:              sname,
-		PasswordHash:       passwordHash,
-		PasswordSalt:       passwordSalt,
-		LoginKeySalt:       loginKeySalt,
-		EncryptedMasterKey: encryptedMasterKey,
+		Type:                 protocol.AuthTypeRegisterRequest,
+		Login:                login,
+		FName:                fname,
+		SName:                sname,
+		PasswordHash:         passwordHash,
+		PasswordSalt:         passwordSalt,
+		LoginKeySalt:         loginKeySalt,
+		EncryptedMasterKey:   encryptedMasterKey,
+		IdentityPublicKey:    identityPublicKey,
+		EncryptedIdentityKey: encryptedIdentityKey,
 	}
 
 	data, err := protocol.MarshalJSON(request)
@@ -265,11 +279,17 @@ func (n *Node) Login(
 	if err != nil {
 		return nil, fmt.Errorf("unwrap master key: %w", err)
 	}
+	identityPrivateKeyBytes, err := crypto.UnwrapKey(success.EncryptedIdentityKey, loginKey)
+	if err != nil {
+		return nil, fmt.Errorf("unwrap identity key: %w", err)
+	}
 
 	return &LoginResult{
-		SessionID: success.SessionID,
-		MasterKey: masterKey,
-		FName:     success.FName,
-		SName:     success.SName,
+		SessionID:          success.SessionID,
+		MasterKey:          masterKey,
+		IdentityPrivateKey: identityPrivateKeyBytes,
+		IdentityPublicKey:  success.IdentityPublicKey,
+		FName:              success.FName,
+		SName:              success.SName,
 	}, nil
 }

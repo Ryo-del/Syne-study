@@ -11,16 +11,20 @@ import (
 )
 
 type testSessionProvider struct {
-	userID string
-	fname  string
-	sname  string
-	ok     bool
+	userID            string
+	fname             string
+	sname             string
+	ok                bool
+	identityPublicKey []byte
+	identityOK        bool
 }
 
 func (p testSessionProvider) CurrentUserInfo() (string, string, string, bool) {
 	return p.userID, p.fname, p.sname, p.ok
 }
-
+func (p testSessionProvider) CurrentIdentityPublicKey() ([]byte, bool) {
+	return p.identityPublicKey, p.identityOK
+}
 func newTestNode(t *testing.T) *Node {
 	t.Helper()
 

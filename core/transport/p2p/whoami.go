@@ -15,11 +15,13 @@ import (
 // весь пакет app и не создавал циклическую зависимость.
 type SessionProvider interface {
 	CurrentUserInfo() (userID, fname, sname string, ok bool)
+	CurrentIdentityPublicKey() ([]byte, bool)
 }
 
 func peerIDFromString(s string) (peer.ID, error) {
 	return peer.Decode(s)
 }
+
 func (n *Node) SetWhoAmIHandler(provider SessionProvider) {
 	n.host.SetStreamHandler(protocol.WhoAmIStreamProtocol, func(stream network.Stream) {
 		defer stream.Close()
