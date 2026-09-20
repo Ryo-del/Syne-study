@@ -31,10 +31,6 @@ import {
   isTauri,
 } from "@tauri-apps/api/core";
 
-import {
-  getCurrentWindow,
-} from "@tauri-apps/api/window";
-
 import type {
   AppEvent,
   ChatSummary,
@@ -84,10 +80,8 @@ import {
 } from "./lib/chats";
 
 import {
-  buildWindowIcon,
   loadRoundedIconBytes,
 } from "./lib/icons";
-
 import IconRail from "./components/layout/IconRail";
 import PeersPanel from "./components/layout/PeersPanel";
 import ChatArea from "./components/chat/ChatArea";
@@ -305,6 +299,7 @@ export default function App() {
     setDeletingHistory,
   ] = useState(false);
 
+  
  const messageStreamRef =
   useRef<HTMLDivElement>(null);
 
@@ -322,7 +317,6 @@ export default function App() {
 
   const deferredQuery =
     useDeferredValue(query);
-
   const visibleChats = useMemo(
     () =>
       snapshot.chats.filter(
@@ -434,6 +428,41 @@ async function refreshMessages(chatId: string) {
     ) ??
     APP_ICON_OPTIONS[0];
 
+useEffect(() => {
+  if (!isTauri()) {
+    return;
+  }
+
+  let cancelled = false;
+
+  async function applyAppIcon() {
+    try {
+      const iconBytes =
+        await loadRoundedIconBytes(
+          currentAppIcon.src,
+        );
+
+      if (!iconBytes || cancelled) {
+        return;
+      }
+
+      await invoke("set_app_icon", {
+        iconBytes: Array.from(iconBytes),
+      });
+    } catch (err) {
+      console.error(
+        "Failed to apply app icon:",
+        err,
+      );
+    }
+  }
+
+  void applyAppIcon();
+
+  return () => {
+    cancelled = true;
+  };
+}, [currentAppIcon.src]);
   const filteredChats = useMemo(() => {
     const needle =
       deferredQuery
