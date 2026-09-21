@@ -3,6 +3,7 @@ module Syne
 go 1.26.5
 
 require (
+	github.com/Ryo-del/Syne-protocol v0.0.1
 	github.com/libp2p/go-libp2p v0.48.0
 	github.com/libp2p/go-libp2p-kad-dht v0.39.0
 	github.com/libp2p/go-libp2p-record v0.3.1
@@ -14,7 +15,6 @@ require (
 require (
 	filippo.io/bigmod v0.1.1-0.20260103110540-f8a47775ebe5 // indirect
 	filippo.io/keygen v0.0.0-20260114151900-8e2790ea4c5b // indirect
-	github.com/Ryo-del/Syne-protocol v0.0.0
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -125,5 +125,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/Ryo-del/Syne-protocol => ../Syne-protocol
