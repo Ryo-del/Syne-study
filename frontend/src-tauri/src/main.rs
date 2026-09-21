@@ -15,7 +15,7 @@ const API_ADDR: &str = "127.0.0.1:38673";
 // самим syne-server при старте (см. лог "listening addr=...").
 // TODO: сделать настраиваемым (переменная окружения / файл конфигурации),
 // а не хардкодить — PeerID разный на каждой машине, где стоит study-сервер.
-const STUDY_SERVER_ADDR: &str = "/ip4/127.0.0.1/tcp/61134/p2p/12D3KooWMJmEPyqPPf8AaV2EwDSPtmYrQJkvJQoWT5TGu2gqhBJk";
+const STUDY_SERVER_ADDR: &str = "/ip4/192.168.31.64/tcp/62862/p2p/12D3KooWMJmEPyqPPf8AaV2EwDSPtmYrQJkvJQoWT5TGu2gqhBJk";
 
 struct BackendState {
     child: Mutex<Option<CommandChild>>,
