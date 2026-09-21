@@ -10,6 +10,13 @@ use tauri_plugin_shell::{
 
 const API_ADDR: &str = "127.0.0.1:38673";
 
+// Multiaddr study-сервера (syne-server). Строка вида
+// "/ip4/<host>/tcp/<port>/p2p/<PeerID>" — PeerID печатается
+// самим syne-server при старте (см. лог "listening addr=...").
+// TODO: сделать настраиваемым (переменная окружения / файл конфигурации),
+// а не хардкодить — PeerID разный на каждой машине, где стоит study-сервер.
+const STUDY_SERVER_ADDR: &str = "/ip4/127.0.0.1/tcp/61134/p2p/12D3KooWMJmEPyqPPf8AaV2EwDSPtmYrQJkvJQoWT5TGu2gqhBJk";
+
 struct BackendState {
     child: Mutex<Option<CommandChild>>,
 }
@@ -137,6 +144,8 @@ fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
             workdir
                 .to_str()
                 .ok_or_else(|| "workdir contains invalid UTF-8".to_string())?,
+            "--server-addr",
+            STUDY_SERVER_ADDR,
         ]);
     let (mut rx, child) = command
         .spawn()

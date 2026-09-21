@@ -89,6 +89,7 @@ import SettingsPopover from "./components/settings/SettingsPopover";
 import ContactPopover from "./components/contacts/ContactPopover";
 import ErrorToast from "./components/common/ErrorToast";
 import ContextMenus from "./components/common/ContextMenus";
+import AuthGate from "./components/auth/AuthGate";
 
 const EMPTY_SNAPSHOT: Snapshot = {
   local_id: "",
@@ -140,7 +141,8 @@ export default function App() {
 
   const [error, setError] =
     useState("");
-
+  const [authenticated, setAuthenticated] = 
+    useState(false);
   const [errorToastKey, setErrorToastKey] =
     useState(0);
 
@@ -928,7 +930,16 @@ useEffect(() => {
     });
     setChatContextMenu(null);
   }
-
+  if (!authenticated) {
+  return (
+    <AuthGate
+      onAuthenticated={() => {
+        setAuthenticated(true);
+        void refreshBootstrap(true);
+      }}
+    />
+  );
+}
 
   return (
     <>
