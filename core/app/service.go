@@ -338,6 +338,28 @@ func (s *Service) Register(login, fname, sname, password string) error {
 
 	return s.Login(login, password)
 }
+func (s *Service) ClaimAccount(login, claimCode, newPassword string) error {
+	result, err := s.node.ClaimAccount(s.ctx, s.cfg.ServerAddr, login, claimCode, newPassword)
+	if err != nil {
+		return err
+	}
+	s.sessionMu.Lock()
+	s.session = &UserSession{
+		UserID:             login,
+		SessionID:          result.SessionID,
+		MasterKey:          result.MasterKey,
+		IdentityPrivateKey: result.IdentityPrivateKey,
+		IdentityPublicKey:  result.IdentityPublicKey,
+		FName:              result.FName,
+		SName:              result.SName,
+	}
+	s.sessionMu.Unlock()
+	s.emit(Event{
+		Type:      "logged_in",
+		Timestamp: time.Now().UnixMilli(),
+	})
+	return nil
+}
 func (s *Service) currentSession() (*UserSession, error) {
 	defer s.sessionMu.RUnlock()
 	s.sessionMu.RLock()

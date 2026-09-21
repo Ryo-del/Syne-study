@@ -293,3 +293,122 @@ func (n *Node) Login(
 		SName:              success.SName,
 	}, nil
 }
+
+// ClaimAccount активирует аккаунт, созданный лаборантом (login + claimCode),
+// и в том же запросе задаёт постоянный пароль ученика вместе с криптографическими
+// ключами. При успехе сразу возвращает LoginResult — дополнительный Login не нужен.
+func (n *Node) ClaimAccount(
+	ctx context.Context,
+	serverAddr string,
+	login, claimCode, newPassword string,
+) (*LoginResult, error) {
+	serverID, err := n.dialServer(ctx, serverAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := n.host.NewStream(
+		ctx,
+		serverID,
+		protocol.AuthStreamProtocol,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open auth stream: %w", err)
+	}
+	defer stream.Close()
+
+	passwordSalt, err := crypto.GenerateSalt()
+	if err != nil {
+		return nil, fmt.Errorf("generate password salt: %w", err)
+	}
+
+	loginKeySalt, err := crypto.GenerateSalt()
+	if err != nil {
+		return nil, fmt.Errorf("generate login key salt: %w", err)
+	}
+
+	passwordHash := crypto.DerivePasswordHash(newPassword, passwordSalt)
+	loginKey := crypto.DeriveLoginKey(newPassword, loginKeySalt)
+
+	masterKey := make([]byte, crypto.SharedKeySize)
+	if _, err := rand.Read(masterKey); err != nil {
+		return nil, fmt.Errorf("generate master key: %w", err)
+	}
+	identityKey, err := crypto.GenerateIdentityKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generate identity key pair: %w", err)
+	}
+
+	identityPublicKey := identityKey.PublicKey().Bytes()
+	identityPrivateKeyBytes := identityKey.Bytes()
+	encryptedIdentityKey, err := crypto.WrapKey(identityPrivateKeyBytes, loginKey)
+	if err != nil {
+		return nil, fmt.Errorf("wrap identity key: %w", err)
+	}
+	encryptedMasterKey, err := crypto.WrapKey(masterKey, loginKey)
+	if err != nil {
+		return nil, fmt.Errorf("wrap master key: %w", err)
+	}
+
+	request := protocol.ClaimRequest{
+		Type:                 protocol.AuthTypeClaimRequest,
+		Login:                login,
+		ClaimCode:            claimCode,
+		PasswordHash:         passwordHash,
+		PasswordSalt:         passwordSalt,
+		LoginKeySalt:         loginKeySalt,
+		EncryptedMasterKey:   encryptedMasterKey,
+		IdentityPublicKey:    identityPublicKey,
+		EncryptedIdentityKey: encryptedIdentityKey,
+	}
+
+	data, err := protocol.MarshalJSON(request)
+	if err != nil {
+		return nil, fmt.Errorf("marshal claim request: %w", err)
+	}
+
+	if err := protocol.WriteFramedMessage(stream, data); err != nil {
+		return nil, fmt.Errorf("send claim request: %w", err)
+	}
+
+	responseData, err := protocol.ReadFramedMessage(stream)
+	if err != nil {
+		return nil, fmt.Errorf("read claim response: %w", err)
+	}
+
+	responseType, err := protocol.PeekType(responseData)
+	if err != nil {
+		return nil, fmt.Errorf("read claim response type: %w", err)
+	}
+
+	switch responseType {
+	case protocol.AuthTypeClaimSuccess:
+		success, err := protocol.UnmarshalJSON[protocol.ClaimSuccess](responseData)
+		if err != nil {
+			return nil, fmt.Errorf("parse claim success: %w", err)
+		}
+
+		return &LoginResult{
+			SessionID:          success.SessionID,
+			MasterKey:          masterKey,
+			IdentityPrivateKey: identityPrivateKeyBytes,
+			IdentityPublicKey:  identityPublicKey,
+			FName:              success.FName,
+			SName:              success.SName,
+		}, nil
+
+	case protocol.AuthTypeClaimFailure:
+		failure, err := protocol.UnmarshalJSON[protocol.ClaimFailure](responseData)
+		if err != nil {
+			return nil, fmt.Errorf("parse claim failure: %w", err)
+		}
+
+		return nil, fmt.Errorf("claim failed: %s", failure.Reason)
+
+	default:
+		return nil, fmt.Errorf(
+			"unexpected claim response type: %s",
+			responseType,
+		)
+	}
+}

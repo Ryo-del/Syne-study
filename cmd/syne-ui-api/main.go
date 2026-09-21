@@ -80,6 +80,7 @@ func main() {
 	mux.HandleFunc("/api/auth/register", srv.handleRegister)
 	mux.HandleFunc("/api/auth/login", srv.handleLogin)
 	mux.HandleFunc("/api/auth/logout", srv.handleLogout)
+	mux.HandleFunc("/api/auth/claim", srv.handleClaim)
 
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -125,7 +126,26 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, snapshot)
 }
-
+func (s *server) handleClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Login     string `json:"login"`
+		ClaimCode string `json:"claim_code"`
+		Password  string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.service.ClaimAccount(req.Login, req.ClaimCode, req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
 func (s *server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
