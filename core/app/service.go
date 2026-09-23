@@ -1076,10 +1076,26 @@ func (s *Service) resolveWhoAmI(peerID string) {
 		return
 	}
 
+	displayName := strings.TrimSpace(fmt.Sprintf("%s %s", resp.FName, resp.SName))
+	if displayName == "" {
+		displayName = resp.UserID
+	}
+
+	// КЛЮЧЕВОЙ ФИКС: раньше резолвленное имя сохранялось только в
+	// оперативную карту s.neighbors, которую registerNeighbor полностью
+	// пересоздаёт на каждый пакет. lookupPeerTitle ищет имя через
+	// history.LookupPeerAlias (постоянное хранилище в SQLite), а туда имя
+	// никогда не попадало — поэтому уже после первого же отправленного
+	// сообщения имя откатывалось обратно на голый PeerID. Теперь пишем
+	// алиас в БД, и он переживёт любой последующий registerNeighbor.
+	if displayName != "" {
+		_ = history.UpsertPeerAlias(peerID, displayName)
+	}
+
 	s.stateMu.Lock()
 	if item, ok := s.neighbors[peerID]; ok {
 		item.UserID = resp.UserID
-		item.Name = fmt.Sprintf("%s %s", resp.FName, resp.SName)
+		item.Name = displayName
 		s.neighbors[peerID] = item
 	}
 	s.stateMu.Unlock()
@@ -1087,7 +1103,7 @@ func (s *Service) resolveWhoAmI(peerID string) {
 	s.emit(Event{
 		Type:      "peer_discovered",
 		Timestamp: time.Now().UnixMilli(),
-		Peer:      &PeerPresence{PeerID: peerID, UserID: resp.UserID, Name: fmt.Sprintf("%s %s", resp.FName, resp.SName)},
+		Peer:      &PeerPresence{PeerID: peerID, UserID: resp.UserID, Name: displayName},
 	})
 }
 func (s *Service) registerNeighbor(peerID, addr, name string) {
@@ -1097,23 +1113,38 @@ func (s *Service) registerNeighbor(peerID, addr, name string) {
 		return
 	}
 	blocked, _ := corechat.IsBlocked(peerID)
+	displayName := s.lookupPeerTitle(peerID)
+
+	s.stateMu.Lock()
+	existing, hadExisting := s.neighbors[peerID]
 	item := PeerPresence{
-		PeerID:   peerID,
-		Name:     s.lookupPeerTitle(peerID),
+		PeerID: peerID,
+		// Раньше UserID тут всегда обнулялся, потому что структура
+		// пересоздавалась с нуля при КАЖДОМ отправленном/полученном пакете.
+		// Это ломало кэш в resolveUserID и вынуждало заново резолвить
+		// логин перед каждой отправкой сообщения — лишние сетевые запросы,
+		// иногда конкурирующие с фоновым resolveWhoAmI и приводящие к
+		// таймаутам/сбоям доставки. Теперь переносим уже известный UserID.
+		UserID:   existing.UserID,
+		Name:     displayName,
 		Addr:     addr,
 		LastSeen: time.Now().UnixMilli(),
 		Blocked:  blocked,
 	}
-	s.stateMu.Lock()
+	if item.Addr == "" && hadExisting {
+		// Событие могло прийти без адреса (например, повторный
+		// handlePacket) — не затираем ранее известный адрес пустотой.
+		item.Addr = existing.Addr
+	}
 	s.neighbors[peerID] = item
 	s.stateMu.Unlock()
+
 	s.emit(Event{
 		Type:      "peer_discovered",
 		Timestamp: item.LastSeen,
 		Peer:      &item,
 	})
 }
-
 func (s *Service) lookupPeerName(peerID string) string {
 	if name, err := history.LookupPeerAlias(peerID); err == nil && name != "" {
 		return name
