@@ -179,7 +179,7 @@ func (s *Service) resolveIdentityKey(peerID string) ([]byte, error) {
 	}
 	s.stateMu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	resp, err := s.node.GetIdentityKey(ctx, peerID)
 	if err != nil {
@@ -1068,7 +1068,7 @@ func (s *Service) handlePeer(info peer.AddrInfo) {
 	go s.resolveWhoAmI(info.ID.String())
 }
 func (s *Service) resolveWhoAmI(peerID string) {
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
 	resp, err := s.node.WhoAmI(ctx, peerID)
@@ -1209,7 +1209,7 @@ func (s *Service) resolveUserID(peerID string) (string, error) {
 	}
 	s.stateMu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	resp, err := s.node.WhoAmI(ctx, peerID)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 
 	protocol "github.com/Ryo-del/Syne-protocol"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 )
 
 func (n *Node) SetIdentityKeyHandler(provider SessionProvider) {
@@ -38,13 +39,29 @@ func (n *Node) SetIdentityKeyHandler(provider SessionProvider) {
 	})
 }
 
+// GetIdentityKey запрашивает у собеседника его X25519 identity-ключ,
+// нужный для вычисления общего ключа чата (DeriveChatKey в service.go).
+// Та же проблема, что и в WhoAmI (см. whoami.go): функция сразу открывала
+// stream без предварительного подключения. Если с собеседником ещё не
+// было прямого соединения — запрос падал, deriveChatKeyWith возвращал
+// ошибку, и SendMessage прерывался ДО вызова history.SaveMessage — то
+// есть сообщение не отправлялось и не сохранялось локально. То же самое
+// происходило и на стороне получателя при попытке расшифровать входящее
+// сообщение (handlePacket тоже вызывает deriveChatKeyWith), поэтому
+// сообщения пропадали в обе стороны. Теперь сначала резолвим адрес и
+// подключаемся, как при обычной отправке.
 func (n *Node) GetIdentityKey(ctx context.Context, targetID string) (*protocol.GetIdentityKeyResponse, error) {
-	pid, err := peerIDFromString(targetID)
+	info, err := n.ResolvePeer(ctx, targetID)
 	if err != nil {
-		return nil, fmt.Errorf("parse target peer id: %w", err)
+		return nil, fmt.Errorf("resolve peer %s: %w", targetID, err)
 	}
 
-	stream, err := n.host.NewStream(ctx, pid, protocol.IdentityKeyStreamProtocol)
+	n.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.TempAddrTTL)
+	if err := n.host.Connect(ctx, info); err != nil {
+		return nil, fmt.Errorf("connect to peer %s: %w", targetID, err)
+	}
+
+	stream, err := n.host.NewStream(ctx, info.ID, protocol.IdentityKeyStreamProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("open identity key stream: %w", err)
 	}

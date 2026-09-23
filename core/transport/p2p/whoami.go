@@ -53,21 +53,27 @@ func (n *Node) SetWhoAmIHandler(provider SessionProvider) {
 	})
 }
 
+// WhoAmI спрашивает у собеседника его пользовательские данные (login, имя,
+// фамилию). Раньше функция сразу открывала stream через n.host.NewStream —
+// это требует уже установленного соединения. Если с собеседником ещё не
+// было прямого обмена пакетами (первый контакт — типичный случай, когда
+// его только что нашли через mDNS/presence), NewStream падал с ошибкой,
+// и WhoAmI молча проваливался — поэтому в UI вместо имени показывался
+// сырой PeerID. Теперь сначала резолвим адрес тем же путём, что и обычная
+// отправка сообщений (ResolvePeer: кэш → Peerstore → DHT), и явно
+// подключаемся перед открытием stream — как это уже делает send() в node.go.
 func (n *Node) WhoAmI(ctx context.Context, targetID string) (*protocol.WhoAmIResponse, error) {
-	pid, err := peerIDFromString(targetID)
+	info, err := n.ResolvePeer(ctx, targetID)
 	if err != nil {
-		return nil, fmt.Errorf("parse target peer id: %w", err)
+		return nil, fmt.Errorf("resolve peer %s: %w", targetID, err)
 	}
 
-	// Пир мог быть узнан только через study-server presence (у нас есть
-	// только его PeerID, без адреса). Без этого шага NewStream ничего не
-	// найдёт в peerstore и сразу упадёт с ошибкой "no addresses" для любого
-	// пира, не обнаруженного через mDNS/LAN.
-	if info, resolveErr := n.ResolvePeer(ctx, targetID); resolveErr == nil && len(info.Addrs) > 0 {
-		n.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.TempAddrTTL)
+	n.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.TempAddrTTL)
+	if err := n.host.Connect(ctx, info); err != nil {
+		return nil, fmt.Errorf("connect to peer %s: %w", targetID, err)
 	}
 
-	stream, err := n.host.NewStream(ctx, pid, protocol.WhoAmIStreamProtocol)
+	stream, err := n.host.NewStream(ctx, info.ID, protocol.WhoAmIStreamProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("open whoami stream: %w", err)
 	}
