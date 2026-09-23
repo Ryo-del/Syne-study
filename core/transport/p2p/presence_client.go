@@ -7,7 +7,19 @@ import (
 	protocol "github.com/Ryo-del/Syne-protocol"
 )
 
-func (n *Node) StartPresence(ctx context.Context, serverAddr string, userID string, onSnapshot func(online []string), onUpdate func(userID, status string)) error {
+// StartPresence сообщает study-серверу, что этот пользователь в сети
+// (login, свой PeerID и имя — чтобы остальные могли увидеть его
+// в nearby-списке и сразу открыть чат по PeerID), получает список уже
+// online-пользователей и слушает обновления (кто-то зашёл/вышел).
+func (n *Node) StartPresence(
+	ctx context.Context,
+	serverAddr string,
+	userID string,
+	fname string,
+	sname string,
+	onSnapshot func(users []protocol.PresenceUser),
+	onUpdate func(user protocol.PresenceUser, status string),
+) error {
 	serverID, err := n.dialServer(ctx, serverAddr)
 	if err != nil {
 		return err
@@ -19,14 +31,16 @@ func (n *Node) StartPresence(ctx context.Context, serverAddr string, userID stri
 	msg := protocol.PresenceOnline{
 		Type:   protocol.PresenceTypeOnline,
 		UserID: userID,
+		PeerID: n.ID(),
+		FName:  fname,
+		SName:  sname,
 	}
 	data, err := protocol.MarshalJSON(msg)
 	if err != nil {
 		return err
 	}
 
-	err = protocol.WriteFramedMessage(stream, data)
-	if err != nil {
+	if err := protocol.WriteFramedMessage(stream, data); err != nil {
 		return err
 	}
 	data, err = protocol.ReadFramedMessage(stream)
@@ -54,7 +68,7 @@ func (n *Node) StartPresence(ctx context.Context, serverAddr string, userID stri
 			if err != nil {
 				continue // одно повреждённое сообщение не должно рвать весь цикл — просто пропускаем
 			}
-			onUpdate(update.UserID, update.Status)
+			onUpdate(update.User, update.Status)
 		}
 	}()
 	return nil

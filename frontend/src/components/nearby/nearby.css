@@ -1,0 +1,241 @@
+.nearby-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.nearby-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 20px 20px 6px;
+}
+
+.nearby-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.nearby-header p {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.nearby-count {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 999px;
+
+  background: var(--signal-dim);
+  color: var(--signal);
+  border: 1px solid rgba(35, 165, 90, 0.25);
+
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.nearby-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  margin: 10px 16px 4px;
+  padding: 0 12px;
+  height: 40px;
+
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.nearby-search span {
+  font-size: 16px;
+  opacity: 0.5;
+  color: var(--ink-muted);
+}
+
+.nearby-search input {
+  flex: 1;
+  height: 100%;
+
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.nearby-search input::placeholder {
+  color: var(--ink-muted);
+}
+
+.nearby-list {
+  flex: 1;
+  overflow-y: auto;
+
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  padding: 4px 10px 10px;
+}
+
+.nearby-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.nearby-list::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 10px;
+}
+
+.nearby-row {
+  position: relative;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  border-radius: var(--radius-md);
+  transition: background 120ms ease;
+}
+
+.nearby-row:hover {
+  background: var(--surface);
+}
+
+.nearby-main {
+  flex: 1;
+  min-width: 0;
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  border: none;
+  background: transparent;
+  color: inherit;
+
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius-md);
+}
+
+.nearby-avatar {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 50%;
+  font-size: 1.2rem;
+  line-height: 1;
+
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(35, 165, 90, 0.28);
+  box-shadow: 0 0 0 1px rgba(35, 165, 90, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  cursor: pointer;
+}
+
+.nearby-avatar:hover {
+  background: var(--surface-hover);
+}
+
+.nearby-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nearby-name {
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: var(--ink);
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nearby-id {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.nearby-online-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  margin-right: 12px;
+
+  border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 8px rgba(35, 165, 90, 0.5);
+}
+
+.nearby-empty {
+  padding: 32px 8px;
+  text-align: center;
+  color: var(--ink-muted);
+  font-size: 0.86rem;
+}
+
+.nearby-emoji-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 12px;
+  z-index: 50;
+
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+
+  padding: 10px;
+
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.nearby-emoji-option {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.nearby-emoji-option:hover {
+  background: var(--surface);
+}

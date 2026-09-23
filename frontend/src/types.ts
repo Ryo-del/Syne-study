@@ -23,8 +23,9 @@ export type PeerPresence = {
 
 export type OnlineUser = {
   user_id: string;
-  peer_id?: string;
-  name?: string;
+  peer_id: string;
+  fname: string;
+  sname: string;
   online: boolean;
   last_seen: number;
 };
@@ -76,6 +77,7 @@ export type AppEvent = {
   type: string;
   timestamp: number;
   peer?: PeerPresence;
+  online_user?: OnlineUser;
   chat?: ChatSummary;
   message?: UIMessage;
   contact?: Contact;

@@ -9,6 +9,7 @@ import (
 	protocol "github.com/Ryo-del/Syne-protocol"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 )
 
 // SessionProvider — минимальный интерфейс, чтобы whoami.go не тянул
@@ -56,6 +57,14 @@ func (n *Node) WhoAmI(ctx context.Context, targetID string) (*protocol.WhoAmIRes
 	pid, err := peerIDFromString(targetID)
 	if err != nil {
 		return nil, fmt.Errorf("parse target peer id: %w", err)
+	}
+
+	// Пир мог быть узнан только через study-server presence (у нас есть
+	// только его PeerID, без адреса). Без этого шага NewStream ничего не
+	// найдёт в peerstore и сразу упадёт с ошибкой "no addresses" для любого
+	// пира, не обнаруженного через mDNS/LAN.
+	if info, resolveErr := n.ResolvePeer(ctx, targetID); resolveErr == nil && len(info.Addrs) > 0 {
+		n.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.TempAddrTTL)
 	}
 
 	stream, err := n.host.NewStream(ctx, pid, protocol.WhoAmIStreamProtocol)

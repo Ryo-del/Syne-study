@@ -201,10 +201,13 @@ export function listenEvents(onEvent: (event: AppEvent) => void) {
   source.onerror = () => undefined;
 
   source.addEventListener("peer_discovered", forward as EventListener);
+  source.addEventListener("online_snapshot", forward as EventListener);
+  source.addEventListener("online_user_updated", forward as EventListener);
   source.addEventListener("message_received", forward as EventListener);
   source.addEventListener("message_sent", forward as EventListener);
   source.addEventListener("chat_updated", forward as EventListener);
   source.addEventListener("chat_read", forward as EventListener);
+  source.addEventListener("chat_history_deleted", forward as EventListener);
   source.addEventListener("contact_added", forward as EventListener);
   source.addEventListener("contact_updated", forward as EventListener);
   source.addEventListener("contact_deleted", forward as EventListener);

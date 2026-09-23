@@ -10,13 +10,6 @@ use tauri_plugin_shell::{
 
 const API_ADDR: &str = "127.0.0.1:38673";
 
-// Multiaddr study-сервера (syne-server). Строка вида
-// "/ip4/<host>/tcp/<port>/p2p/<PeerID>" — PeerID печатается
-// самим syne-server при старте (см. лог "listening addr=...").
-// TODO: сделать настраиваемым (переменная окружения / файл конфигурации),
-// а не хардкодить — PeerID разный на каждой машине, где стоит study-сервер.
-const STUDY_SERVER_ADDR: &str = "/ip4/192.168.31.64/tcp/62862/p2p/12D3KooWMJmEPyqPPf8AaV2EwDSPtmYrQJkvJQoWT5TGu2gqhBJk";
-
 struct BackendState {
     child: Mutex<Option<CommandChild>>,
 }
@@ -131,22 +124,70 @@ fn backend_workdir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+// Ищет server-addr.txt рядом с исполняемым файлом или в корне репозитория
+// (для `tauri dev`). Возвращает None, если файла нет — в этом случае
+// Go-бэкенд получает пустой ServerAddr и сам ищет study-сервер в локальной
+// сети через mDNS (см. Syne/core/transport/p2p/discovery_server.go).
+// Этот файл нужен только как ручной override для сетей, где mDNS не
+// достаёт (сервер за роутером, в другой подсети и т.п.) — формат: один
+// multiaddr в файле, например:
+// /ip4/192.168.31.64/tcp/9000/p2p/12D3KooW...
+fn resolve_server_addr(app: &AppHandle) -> Option<String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("server-addr.txt"));
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        candidates.push(repo_root().join("server-addr.txt"));
+        candidates.push(repo_root().join("frontend/src-tauri/server-addr.txt"));
+    }
+
+    if let Ok(app_config_dir) = app.path().app_config_dir() {
+        candidates.push(app_config_dir.join("server-addr.txt"));
+    }
+
+    for candidate in candidates {
+        if let Ok(contents) = std::fs::read_to_string(&candidate) {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                eprintln!("using manual server override from {}: {trimmed}", candidate.display());
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    eprintln!("no server-addr.txt override found — letting the backend auto-discover the study server");
+    None
+}
+
 fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
     let workdir = backend_workdir(app)?;
+    let workdir_str = workdir
+        .to_str()
+        .ok_or_else(|| "workdir contains invalid UTF-8".to_string())?
+        .to_string();
+
+    let mut args = vec![
+        "--addr".to_string(),
+        API_ADDR.to_string(),
+        "--workdir".to_string(),
+        workdir_str,
+    ];
+
+    if let Some(server_addr) = resolve_server_addr(app) {
+        args.push("--server-addr".to_string());
+        args.push(server_addr);
+    }
+
     let command = app
         .shell()
         .sidecar("syne-ui-api")
         .map_err(|err| format!("failed to configure sidecar: {err}"))?
-        .args([
-            "--addr",
-            API_ADDR,
-            "--workdir",
-            workdir
-                .to_str()
-                .ok_or_else(|| "workdir contains invalid UTF-8".to_string())?,
-            "--server-addr",
-            STUDY_SERVER_ADDR,
-        ]);
+        .args(args);
     let (mut rx, child) = command
         .spawn()
         .map_err(|err| format!("failed to start sidecar: {err}"))?;

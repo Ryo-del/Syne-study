@@ -34,12 +34,13 @@ type Config struct {
 }
 
 type Snapshot struct {
-	LocalID   string                 `json:"local_id"`
-	Port      int                    `json:"port"`
-	Contacts  []corechat.Contact     `json:"contacts"`
-	Blocked   []corechat.BlockedPeer `json:"blocked"`
-	Neighbors []PeerPresence         `json:"neighbors"`
-	Chats     []ChatSummary          `json:"chats"`
+	LocalID     string                 `json:"local_id"`
+	Port        int                    `json:"port"`
+	Contacts    []corechat.Contact     `json:"contacts"`
+	Blocked     []corechat.BlockedPeer `json:"blocked"`
+	Neighbors   []PeerPresence         `json:"neighbors"`
+	OnlineUsers []OnlineUser           `json:"online_users"`
+	Chats       []ChatSummary          `json:"chats"`
 }
 type UserSession struct {
 	UserID             string
@@ -57,6 +58,18 @@ type PeerPresence struct {
 	Addr     string `json:"addr"`
 	LastSeen int64  `json:"last_seen"`
 	Blocked  bool   `json:"blocked"`
+}
+
+// OnlineUser — запись из presence-канала study-сервера: человек сейчас
+// в сети (независимо от того, обнаружен ли он локально по mDNS/DHT).
+// Именно на основе этого списка строится вкладка "Nearby".
+type OnlineUser struct {
+	UserID   string `json:"user_id"`
+	PeerID   string `json:"peer_id"`
+	FName    string `json:"fname"`
+	SName    string `json:"sname"`
+	Online   bool   `json:"online"`
+	LastSeen int64  `json:"last_seen"`
 }
 
 type ChatSummary struct {
@@ -83,14 +96,15 @@ type UIMessage struct {
 }
 
 type Event struct {
-	Type      string                `json:"type"`
-	Timestamp int64                 `json:"timestamp"`
-	Peer      *PeerPresence         `json:"peer,omitempty"`
-	Chat      *ChatSummary          `json:"chat,omitempty"`
-	Message   *UIMessage            `json:"message,omitempty"`
-	Contact   *corechat.Contact     `json:"contact,omitempty"`
-	Blocked   *corechat.BlockedPeer `json:"blocked,omitempty"`
-	Error     string                `json:"error,omitempty"`
+	Type       string                `json:"type"`
+	Timestamp  int64                 `json:"timestamp"`
+	Peer       *PeerPresence         `json:"peer,omitempty"`
+	OnlineUser *OnlineUser           `json:"online_user,omitempty"`
+	Chat       *ChatSummary          `json:"chat,omitempty"`
+	Message    *UIMessage            `json:"message,omitempty"`
+	Contact    *corechat.Contact     `json:"contact,omitempty"`
+	Blocked    *corechat.BlockedPeer `json:"blocked,omitempty"`
+	Error      string                `json:"error,omitempty"`
 }
 
 type InviteCode struct {
@@ -114,11 +128,15 @@ type Service struct {
 
 	stateMu      sync.RWMutex
 	neighbors    map[string]PeerPresence
+	onlineUsers  map[string]OnlineUser
 	identityKeys map[string][]byte
 	seen         map[string]time.Time
 	seenOrder    []string
 	unread       map[string]int
 	rateStates   map[string]*rateState
+
+	presenceMu      sync.Mutex
+	presenceStarted bool
 
 	subMu       sync.RWMutex
 	subscribers map[chan Event]struct{}
@@ -145,6 +163,7 @@ func New(config Config) (*Service, error) {
 		cancel:       cancel,
 		identity:     identity,
 		neighbors:    make(map[string]PeerPresence),
+		onlineUsers:  make(map[string]OnlineUser),
 		identityKeys: make(map[string][]byte),
 		seen:         make(map[string]time.Time),
 		unread:       make(map[string]int),
@@ -239,9 +258,32 @@ func (s *Service) Start() error {
 	if err := s.bootstrapContactHints(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(s.cfg.ServerAddr) != "" {
+
+	serverAddr := strings.TrimSpace(s.cfg.ServerAddr)
+	if serverAddr == "" {
+		// Автопоиск по умолчанию: ищем study-сервер в локальной сети через
+		// mDNS вместо того чтобы требовать ручной адрес. mDNS работает
+		// только в пределах одного сегмента сети (одна точка доступа/
+		// свитч) — если сервер за роутером или в другой подсети, здесь
+		// ничего не найдётся, и приложение просто продолжит без сервера,
+		// как и раньше при пустом ServerAddr. Ручной адрес (флаг
+		// --server-addr / файл конфигурации на клиенте) остаётся рабочим
+		// запасным вариантом именно для таких сетей.
+		discoverCtx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+		found, discErr := s.node.DiscoverStudyServer(discoverCtx, 5*time.Second)
+		cancel()
+		if discErr != nil {
+			fmt.Printf("study server auto-discovery: %v\n", discErr)
+		} else {
+			fmt.Printf("study server auto-discovered at %s\n", found)
+			serverAddr = found
+			s.cfg.ServerAddr = found
+		}
+	}
+
+	if serverAddr != "" {
 		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-		welcome, err := s.node.ConnectToServer(ctx, s.cfg.ServerAddr)
+		welcome, err := s.node.ConnectToServer(ctx, serverAddr)
 		cancel()
 		if err != nil {
 			fmt.Printf("warning: could not connect to study server: %v\n", err)
@@ -287,13 +329,24 @@ func (s *Service) Snapshot() (Snapshot, error) {
 	for _, item := range s.neighbors {
 		neighbors = append(neighbors, item)
 	}
+	onlineUsers := make([]OnlineUser, 0, len(s.onlineUsers))
+	for _, item := range s.onlineUsers {
+		onlineUsers = append(onlineUsers, item)
+	}
+	s.stateMu.RUnlock()
+
 	sort.Slice(neighbors, func(i, j int) bool {
 		if neighbors[i].LastSeen == neighbors[j].LastSeen {
 			return neighbors[i].PeerID < neighbors[j].PeerID
 		}
 		return neighbors[i].LastSeen > neighbors[j].LastSeen
 	})
-	s.stateMu.RUnlock()
+	sort.Slice(onlineUsers, func(i, j int) bool {
+		if onlineUsers[i].LastSeen == onlineUsers[j].LastSeen {
+			return onlineUsers[i].UserID < onlineUsers[j].UserID
+		}
+		return onlineUsers[i].LastSeen > onlineUsers[j].LastSeen
+	})
 
 	chats, err := s.listChats()
 	if err != nil {
@@ -301,12 +354,13 @@ func (s *Service) Snapshot() (Snapshot, error) {
 	}
 
 	return Snapshot{
-		LocalID:   s.cfg.LocalID,
-		Port:      s.cfg.Port,
-		Contacts:  contacts,
-		Blocked:   blocked,
-		Neighbors: neighbors,
-		Chats:     chats,
+		LocalID:     s.cfg.LocalID,
+		Port:        s.cfg.Port,
+		Contacts:    contacts,
+		Blocked:     blocked,
+		Neighbors:   neighbors,
+		OnlineUsers: onlineUsers,
+		Chats:       chats,
 	}, nil
 }
 func (s *Service) Login(login, password string) error {
@@ -329,6 +383,7 @@ func (s *Service) Login(login, password string) error {
 		Type:      "logged_in",
 		Timestamp: time.Now().UnixMilli(),
 	})
+	s.startPresence()
 	return nil
 }
 func (s *Service) Register(login, fname, sname, password string) error {
@@ -358,8 +413,97 @@ func (s *Service) ClaimAccount(login, claimCode, newPassword string) error {
 		Type:      "logged_in",
 		Timestamp: time.Now().UnixMilli(),
 	})
+	s.startPresence()
 	return nil
 }
+
+// startPresence сообщает study-серверу "я в сети" и начинает слушать
+// обновления о других пользователях (см. Syne-protocol/presence.go).
+// Идемпотентна — повторный вызов в рамках одного запуска процесса
+// ничего не делает.
+func (s *Service) startPresence() {
+	s.presenceMu.Lock()
+	if s.presenceStarted {
+		s.presenceMu.Unlock()
+		return
+	}
+	s.presenceStarted = true
+	s.presenceMu.Unlock()
+
+	if strings.TrimSpace(s.cfg.ServerAddr) == "" {
+		return // нет study-сервера — presence недоступен (чистый P2P-режим)
+	}
+
+	session, err := s.currentSession()
+	if err != nil {
+		return
+	}
+
+	go func() {
+		err := s.node.StartPresence(
+			s.ctx,
+			s.cfg.ServerAddr,
+			session.UserID,
+			session.FName,
+			session.SName,
+			s.onPresenceSnapshot,
+			s.onPresenceUpdate,
+		)
+		if err != nil {
+			s.emitError(fmt.Errorf("start presence: %w", err))
+		}
+	}()
+}
+
+func (s *Service) onPresenceSnapshot(users []protocol.PresenceUser) {
+	now := time.Now().UnixMilli()
+	s.stateMu.Lock()
+	for _, u := range users {
+		s.onlineUsers[u.UserID] = OnlineUser{
+			UserID:   u.UserID,
+			PeerID:   u.PeerID,
+			FName:    u.FName,
+			SName:    u.SName,
+			Online:   true,
+			LastSeen: now,
+		}
+	}
+	s.stateMu.Unlock()
+
+	s.emit(Event{
+		Type:      "online_snapshot",
+		Timestamp: now,
+	})
+}
+
+func (s *Service) onPresenceUpdate(user protocol.PresenceUser, status string) {
+	now := time.Now().UnixMilli()
+	online := status == protocol.PresenceStatusOnline
+
+	entry := OnlineUser{
+		UserID:   user.UserID,
+		PeerID:   user.PeerID,
+		FName:    user.FName,
+		SName:    user.SName,
+		Online:   online,
+		LastSeen: now,
+	}
+
+	s.stateMu.Lock()
+	if online {
+		s.onlineUsers[user.UserID] = entry
+	} else {
+		delete(s.onlineUsers, user.UserID)
+	}
+	s.stateMu.Unlock()
+
+	s.emit(Event{
+		Type:       "online_user_updated",
+		Timestamp:  now,
+		OnlineUser: &entry,
+	})
+}
+
 func (s *Service) currentSession() (*UserSession, error) {
 	defer s.sessionMu.RUnlock()
 	s.sessionMu.RLock()

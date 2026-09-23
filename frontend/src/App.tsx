@@ -90,6 +90,7 @@ import ContactPopover from "./components/contacts/ContactPopover";
 import ErrorToast from "./components/common/ErrorToast";
 import ContextMenus from "./components/common/ContextMenus";
 import AuthGate from "./components/auth/AuthGate";
+import NearbyPanel from "./components/nearby/NearbyPanel";
 
 const EMPTY_SNAPSHOT: Snapshot = {
   local_id: "",
@@ -134,6 +135,9 @@ export default function App() {
     } | null>(null);
 
   const [query, setQuery] =
+    useState("");
+
+  const [nearbyQuery, setNearbyQuery] =
     useState("");
 
   const [composer, setComposer] =
@@ -389,10 +393,17 @@ export default function App() {
     const nextSnapshot = await loadBootstrap();
 
     startTransition(() => {
-      setSnapshot(nextSnapshot);
+      setSnapshot({
+        ...nextSnapshot,
+        online_users: nextSnapshot.online_users ?? [],
+        neighbors: nextSnapshot.neighbors ?? [],
+        contacts: nextSnapshot.contacts ?? [],
+        blocked: nextSnapshot.blocked ?? [],
+        chats: nextSnapshot.chats ?? [],
+      });
 
       if (selectFirst && !selectedChatId) {
-        const firstChat = nextSnapshot.chats.find(
+        const firstChat = nextSnapshot.chats?.find(
           (chat) => !hiddenChatIds.includes(chat.chat_id),
         );
 
@@ -465,6 +476,106 @@ useEffect(() => {
     cancelled = true;
   };
 }, [currentAppIcon.src]);
+
+  // Подписка на живые события бэкенда (новые сообщения, изменения чатов,
+  // появление/исчезновение людей в сети и т.д.). Без этого UI показывал бы
+  // только то, что было на момент первого bootstrap-запроса.
+  useEffect(() => {
+    if (!authenticated) {
+      return;
+    }
+
+    const unsubscribe = listenEvents((event: AppEvent) => {
+      switch (event.type) {
+        case "message_received":
+        case "message_sent": {
+          if (event.message) {
+            const msg = event.message;
+            setMessages((current) => {
+              const existing = current[msg.chat_id] ?? [];
+              if (
+                existing.some(
+                  (item) => item.message_id === msg.message_id,
+                )
+              ) {
+                return current;
+              }
+              return {
+                ...current,
+                [msg.chat_id]: [...existing, msg],
+              };
+            });
+          }
+          if (event.chat) {
+            const chat = event.chat;
+            setSnapshot((current) => ({
+              ...current,
+              chats: upsertChat(current.chats, chat),
+            }));
+          }
+          break;
+        }
+
+        case "chat_updated":
+        case "chat_read": {
+          if (event.chat) {
+            const chat = event.chat;
+            setSnapshot((current) => ({
+              ...current,
+              chats: upsertChat(current.chats, chat),
+            }));
+          }
+          break;
+        }
+
+        case "peer_discovered": {
+          if (event.peer) {
+            const peer = event.peer;
+            setSnapshot((current) => upsertNeighbor(current, peer));
+          }
+          break;
+        }
+
+        case "online_user_updated": {
+          if (event.online_user) {
+            const onlineUser = event.online_user;
+            setSnapshot((current) =>
+              upsertOnlineUser(current, onlineUser),
+            );
+          }
+          break;
+        }
+
+        // Эти события меняют структуру, которую проще перечитать целиком,
+        // чем аккуратно патчить по кусочкам.
+        case "online_snapshot":
+        case "contact_added":
+        case "contact_updated":
+        case "contact_deleted":
+        case "peer_blocked":
+        case "peer_unblocked":
+        case "chat_history_deleted": {
+          void refreshBootstrap();
+          break;
+        }
+
+        case "error": {
+          if (event.error) {
+            setError(event.error);
+            setErrorToastKey((key) => key + 1);
+          }
+          break;
+        }
+
+        default:
+          break;
+      }
+    });
+
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated]);
+
   const filteredChats = useMemo(() => {
     const needle =
       deferredQuery
@@ -517,20 +628,22 @@ useEffect(() => {
       snapshot.neighbors,
     ]);
 
-  const filteredOnlineUsers =
+   const filteredOnlineUsers =
     useMemo(() => {
+      const users = snapshot.online_users ?? [];
       const needle =
         deferredQuery
           .trim()
           .toLowerCase();
 
       if (!needle) {
-        return snapshot.online_users;
+        return users;
       }
 
-      return snapshot.online_users.filter(
+      return users.filter(
         (item) =>
-          (item.name || "")
+          `${item.sname ?? ""} ${item.fname ?? ""}`
+            .trim()
             .toLowerCase()
             .includes(needle) ||
           item.user_id
@@ -881,14 +994,20 @@ useEffect(() => {
     setEmojiPickerTarget(null);
   }
 
-  function updatePeerEmoji(nextEmoji: string) {
-    if (!selectedChat) return;
+  // Обобщённая функция: ставит эмодзи для произвольного peer_id — используется
+  // и из чата (через updatePeerEmoji ниже), и напрямую из вкладки Nearby.
+  function setPeerEmoji(peerId: string, nextEmoji: string) {
     const nextMap = {
       ...peerEmojis,
-      [selectedChat.peer_id]: nextEmoji,
+      [peerId]: nextEmoji,
     };
     setPeerEmojis(nextMap);
     writeStorage("syne.peer_emojis", nextMap);
+  }
+
+  function updatePeerEmoji(nextEmoji: string) {
+    if (!selectedChat) return;
+    setPeerEmoji(selectedChat.peer_id, nextEmoji);
     setEmojiPickerTarget(null);
   }
 
@@ -935,7 +1054,7 @@ useEffect(() => {
     <AuthGate
       onAuthenticated={() => {
         setAuthenticated(true);
-        void refreshBootstrap(true);
+        void refreshBootstrap(true).finally(() => setLoading(false));
       }}
     />
   );
@@ -963,75 +1082,88 @@ useEffect(() => {
           onSettings={handleSettings}
         />
 
-        <PeersPanel
-          sidebarView={sidebarView}
-          sidebarTitle={sidebarTitle}
-          sidebarBadge={sidebarBadge}
-          searchPlaceholder={
-            searchPlaceholder
-          }
-          query={query}
-          onQueryChange={setQuery}
-          filteredChats={filteredChats}
-          filteredNearbyPeers={
-            filteredNearbyPeers
-          }
-          filteredOnlineUsers={
-            filteredOnlineUsers
-          }
-          filteredContacts={
-            filteredContacts
-          }
-          filteredBlockedPeers={
-            filteredBlockedPeers
-          }
-          selectedChatId={
-            selectedChatId
-          }
-          onSelectChat={(chatId) => {
-            setChatContextMenu(null);
-            setSelectedChatId(chatId);
-          }}
-          onOpenPeer={(
-            peerId,
-            peerAddr,
-            name,
-          ) => {
-            void handleOpenPeer(
+                {sidebarView === "network" ? (
+          <NearbyPanel
+            users={snapshot.online_users ?? []}
+            query={nearbyQuery}
+            onQueryChange={setNearbyQuery}
+            getPeerAvatar={getPeerAvatar}
+            onSetPeerEmoji={setPeerEmoji}
+            onOpenPeer={(peerId, peerAddr, name) => {
+              void handleOpenPeer(peerId, peerAddr, name);
+            }}
+          />
+        ) : (
+          <PeersPanel
+            sidebarView={sidebarView}
+            sidebarTitle={sidebarTitle}
+            sidebarBadge={sidebarBadge}
+            searchPlaceholder={
+              searchPlaceholder
+            }
+            query={query}
+            onQueryChange={setQuery}
+            filteredChats={filteredChats}
+            filteredNearbyPeers={
+              filteredNearbyPeers
+            }
+            filteredOnlineUsers={
+              filteredOnlineUsers
+            }
+            filteredContacts={
+              filteredContacts
+            }
+            filteredBlockedPeers={
+              filteredBlockedPeers
+            }
+            selectedChatId={
+              selectedChatId
+            }
+            onSelectChat={(chatId) => {
+              setChatContextMenu(null);
+              setSelectedChatId(chatId);
+            }}
+            onOpenPeer={(
               peerId,
               peerAddr,
               name,
-            );
-          }}
-          onOpenContact={(contact) => {
-            setContactContextMenu(null);
+            ) => {
+              void handleOpenPeer(
+                peerId,
+                peerAddr,
+                name,
+              );
+            }}
+            onOpenContact={(contact) => {
+              setContactContextMenu(null);
 
-            void handleOpenPeer(
-              contact.peer_id,
-              joinAddress(
-                contact.ip,
-                contact.port,
-              ),
-              contact.name ||
+              void handleOpenPeer(
                 contact.peer_id,
-            );
-          }}
-          onChatContextMenu={
-            handleChatContextMenu
-          }
-          onContactContextMenu={
-            handleContactContextMenu
-          }
-          getPeerAvatar={
-            getPeerAvatar
-          }
-          onUnblock={(peerId) => {
-            void handleUnblock(peerId);
-          }}
-          onNewContact={
-            openManualContactPopover
-          }
-        />
+                joinAddress(
+                  contact.ip,
+                  contact.port,
+                ),
+                contact.name ||
+                  contact.peer_id,
+              );
+            }}
+            onChatContextMenu={
+              handleChatContextMenu
+            }
+            onContactContextMenu={
+              handleContactContextMenu
+            }
+            getPeerAvatar={
+              getPeerAvatar
+            }
+            onUnblock={(peerId) => {
+              void handleUnblock(peerId);
+            }}
+            onNewContact={
+              openManualContactPopover
+            }
+          />
+        )}
 
         <ChatArea
           selectedChat={selectedChat}
