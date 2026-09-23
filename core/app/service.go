@@ -961,22 +961,32 @@ func (s *Service) routeMessage(msg protocol.Message) (protocol.Strategy, error) 
 	directCtx, cancel := context.WithTimeout(s.ctx, relayFallbackTimeout)
 	defer cancel()
 	if strategy, err := s.node.SendDirect(directCtx, msg, false); err == nil {
+		fmt.Printf("routeMessage: delivered msg=%s to=%s via direct\n", msg.ID, msg.TargetID)
 		return strategy, nil
+	} else {
+		fmt.Printf("routeMessage: direct send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
 	}
 
 	if strategy, err := s.node.SendDirect(s.ctx, msg, true); err == nil {
+		fmt.Printf("routeMessage: delivered msg=%s to=%s via relay\n", msg.ID, msg.TargetID)
 		return strategy, nil
+	} else {
+		fmt.Printf("routeMessage: relay send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
 	}
 
 	hopResult := <-hopCh
 	if hopResult.err == nil {
+		fmt.Printf("routeMessage: delivered msg=%s to=%s via hop\n", msg.ID, msg.TargetID)
 		return hopResult.strategy, nil
 	}
+	fmt.Printf("routeMessage: hop send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, hopResult.err)
 
 	msg.Strategy = protocol.StrategyOffline
 	if err := history.QueueMessage(msg, time.Now().Add(10*time.Second).UnixMilli()); err != nil {
+		fmt.Printf("routeMessage: failed to queue offline msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
 		return protocol.StrategyUnknown, err
 	}
+	fmt.Printf("routeMessage: msg=%s to=%s queued as OFFLINE (all delivery attempts failed)\n", msg.ID, msg.TargetID)
 	return protocol.StrategyOffline, nil
 }
 
@@ -1003,10 +1013,15 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 			})
 		}
 	case protocol.MsgChat:
+		fmt.Printf("handlePacket: received chat msg=%s from=%s target=%s strategy=%s ttl=%d\n",
+			msg.ID, msg.From, msg.TargetID, msg.Strategy.String(), msg.TTL)
+
 		if s.isSeen(msg.ID, now, 10*time.Minute) {
+			fmt.Printf("handlePacket: msg=%s already seen, dropping duplicate\n", msg.ID)
 			return
 		}
 		if msg.TargetID != s.cfg.LocalID {
+			fmt.Printf("handlePacket: msg=%s not for us (target=%s, local=%s)\n", msg.ID, msg.TargetID, s.cfg.LocalID)
 			if msg.Strategy != protocol.StrategyHop || msg.TTL <= 1 {
 				return
 			}
@@ -1016,21 +1031,26 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 		}
 		session, err := s.currentSession()
 		if err != nil {
+			fmt.Printf("handlePacket: msg=%s dropped, not logged in\n", msg.ID)
 			return // не залогинены — не можем расшифровать, просто игнорируем сообщение
 		}
 
 		chatKey, err := s.deriveChatKeyWith(sender.ID.String(), msg.ChatID, session)
 		if err != nil {
+			fmt.Printf("handlePacket: msg=%s derive chat key FAILED: %v\n", msg.ID, err)
 			s.emitError(fmt.Errorf("derive chat key: %w", err))
 			return
 		}
 
 		plaintext, err := corecrypto.UnwrapKey(msg.Payload, chatKey)
 		if err != nil {
+			fmt.Printf("handlePacket: msg=%s decrypt FAILED: %v\n", msg.ID, err)
 			s.emitError(fmt.Errorf("decrypt message: %w", err))
 			return
 		}
+		fmt.Printf("handlePacket: msg=%s decrypted OK, saving to history\n", msg.ID)
 		if err := history.SaveMessage(msg); err != nil {
+			fmt.Printf("handlePacket: msg=%s SaveMessage FAILED: %v\n", msg.ID, err)
 			s.emitError(err)
 			return
 		}
