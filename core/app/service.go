@@ -138,6 +138,9 @@ type Service struct {
 	presenceMu      sync.Mutex
 	presenceStarted bool
 
+	resolveMu       sync.Mutex
+	resolveInFlight map[string]chan struct{}
+
 	subMu       sync.RWMutex
 	subscribers map[chan Event]struct{}
 
@@ -159,16 +162,17 @@ func New(config Config) (*Service, error) {
 			Port:       config.Port,
 			ServerAddr: config.ServerAddr,
 		},
-		ctx:          ctx,
-		cancel:       cancel,
-		identity:     identity,
-		neighbors:    make(map[string]PeerPresence),
-		onlineUsers:  make(map[string]OnlineUser),
-		identityKeys: make(map[string][]byte),
-		seen:         make(map[string]time.Time),
-		unread:       make(map[string]int),
-		rateStates:   make(map[string]*rateState),
-		subscribers:  make(map[chan Event]struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
+		identity:        identity,
+		neighbors:       make(map[string]PeerPresence),
+		onlineUsers:     make(map[string]OnlineUser),
+		identityKeys:    make(map[string][]byte),
+		seen:            make(map[string]time.Time),
+		unread:          make(map[string]int),
+		rateStates:      make(map[string]*rateState),
+		resolveInFlight: make(map[string]chan struct{}),
+		subscribers:     make(map[chan Event]struct{}),
 	}, nil
 }
 func (s *Service) resolveIdentityKey(peerID string) ([]byte, error) {
@@ -179,18 +183,23 @@ func (s *Service) resolveIdentityKey(peerID string) ([]byte, error) {
 	}
 	s.stateMu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-	resp, err := s.node.GetIdentityKey(ctx, peerID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve identity key for peer %s: %w", peerID, err)
+	var lastErr error
+	for attempt, timeout := range []time.Duration{10 * time.Second, 20 * time.Second} {
+		ctx, cancel := context.WithTimeout(s.ctx, timeout)
+		resp, err := s.node.GetIdentityKey(ctx, peerID)
+		cancel()
+		if err == nil {
+			s.stateMu.Lock()
+			s.identityKeys[peerID] = resp.IdentityPublicKey
+			s.stateMu.Unlock()
+			return resp.IdentityPublicKey, nil
+		}
+		lastErr = err
+		if attempt == 0 {
+			fmt.Printf("resolve identity key for peer %s: attempt %d failed, retrying with longer timeout: %v\n", peerID, attempt+1, err)
+		}
 	}
-
-	s.stateMu.Lock()
-	s.identityKeys[peerID] = resp.IdentityPublicKey
-	s.stateMu.Unlock()
-
-	return resp.IdentityPublicKey, nil
+	return nil, fmt.Errorf("resolve identity key for peer %s: %w", peerID, lastErr)
 }
 func (s *Service) deriveChatKeyWith(peerID, chatID string, session *UserSession) ([]byte, error) {
 	// 1. Пробуем локальный кэш — работает офлайн.
@@ -1240,21 +1249,71 @@ func (s *Service) resolveUserID(peerID string) (string, error) {
 	}
 	s.stateMu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-	resp, err := s.node.WhoAmI(ctx, peerID)
+	// Де-дупликация: если резолв для этого peer уже идёт (например, его
+	// параллельно запустил и фоновый resolveWhoAmI из handlePeer, и это же
+	// SendMessage), ждём результат первого запроса вместо того чтобы
+	// открывать второй параллельный WhoAmI-stream к тому же peer — именно
+	// такие гонки провоцируют таймауты мультиплексора вида
+	// "no recent network activity".
+	s.resolveMu.Lock()
+	if wait, inFlight := s.resolveInFlight[peerID]; inFlight {
+		s.resolveMu.Unlock()
+		select {
+		case <-wait:
+			s.stateMu.RLock()
+			item, ok := s.neighbors[peerID]
+			s.stateMu.RUnlock()
+			if ok && item.UserID != "" {
+				return item.UserID, nil
+			}
+			return "", fmt.Errorf("resolve user id for peer %s: concurrent resolve did not succeed", peerID)
+		case <-s.ctx.Done():
+			return "", s.ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	s.resolveInFlight[peerID] = done
+	s.resolveMu.Unlock()
+
+	defer func() {
+		s.resolveMu.Lock()
+		delete(s.resolveInFlight, peerID)
+		s.resolveMu.Unlock()
+		close(done)
+	}()
+
+	userID, err := s.doResolveUserID(peerID)
 	if err != nil {
-		return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, err)
+		return "", err
 	}
+	return userID, nil
+}
 
-	s.stateMu.Lock()
-	if item, ok := s.neighbors[peerID]; ok {
-		item.UserID = resp.UserID
-		s.neighbors[peerID] = item
+// doResolveUserID выполняет фактический сетевой запрос, с одной повторной
+// попыткой при таймауте на более длинном интервале — единичный сетевой
+// затык (NAT hole-punch не успел, relay ещё не переключился и т.п.) не
+// должен целиком проваливать отправку сообщения.
+func (s *Service) doResolveUserID(peerID string) (string, error) {
+	var lastErr error
+	for attempt, timeout := range []time.Duration{10 * time.Second, 20 * time.Second} {
+		ctx, cancel := context.WithTimeout(s.ctx, timeout)
+		resp, err := s.node.WhoAmI(ctx, peerID)
+		cancel()
+		if err == nil {
+			s.stateMu.Lock()
+			if item, ok := s.neighbors[peerID]; ok {
+				item.UserID = resp.UserID
+				s.neighbors[peerID] = item
+			}
+			s.stateMu.Unlock()
+			return resp.UserID, nil
+		}
+		lastErr = err
+		if attempt == 0 {
+			fmt.Printf("resolve user id for peer %s: attempt %d failed, retrying with longer timeout: %v\n", peerID, attempt+1, err)
+		}
 	}
-	s.stateMu.Unlock()
-
-	return resp.UserID, nil
+	return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, lastErr)
 }
 
 func (s *Service) chatSummaryByID(chatID string) (ChatSummary, error) {
