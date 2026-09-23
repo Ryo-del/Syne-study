@@ -67,6 +67,17 @@ interface PeersPanelProps {
   onNewContact: () => void;
 }
 
+function onlineUserDisplayName(
+  user: Snapshot["online_users"][number],
+): string {
+  const sname = user.sname?.trim() ?? "";
+  const fname = user.fname?.trim() ?? "";
+
+  const fullName = `${sname} ${fname}`.trim();
+
+  return fullName || user.user_id;
+}
+
 export default function PeersPanel({
   sidebarView,
   sidebarTitle,
@@ -93,6 +104,7 @@ export default function PeersPanel({
     <aside className="peers-panel">
       <div className="peers-panel-header">
         <h2>{sidebarTitle}</h2>
+
         <span className="live-badge">
           {sidebarBadge}
         </span>
@@ -118,8 +130,7 @@ export default function PeersPanel({
               >
                 <button
                   className={`peer-card ${
-                    chat.chat_id ===
-                    selectedChatId
+                    chat.chat_id === selectedChatId
                       ? "active"
                       : ""
                   }`}
@@ -173,8 +184,7 @@ export default function PeersPanel({
                             : "Last seen: recently")}
                       </span>
 
-                      {chat.unread_count >
-                      0 ? (
+                      {chat.unread_count > 0 ? (
                         <span className="unread-badge">
                           {
                             chat.unread_count
@@ -210,40 +220,43 @@ export default function PeersPanel({
         {sidebarView === "network" ? (
           <>
             {filteredOnlineUsers.map(
-              (user) => (
-                <button
-                  key={`user-${user.user_id}`}
-                  className="peer-card"
-                  disabled
-                >
-                  <div className="peer-card-avatar online">
-                    {getPeerAvatar(
-                      user.user_id,
-                      user.name ||
+              (user) => {
+                const name =
+                  onlineUserDisplayName(user);
+
+                return (
+                  <button
+                    key={`user-${user.user_id}`}
+                    className="peer-card"
+                    disabled
+                  >
+                    <div className="peer-card-avatar online">
+                      {getPeerAvatar(
                         user.user_id,
-                    )}
-                  </div>
-
-                  <div className="peer-card-info">
-                    <div className="peer-card-info-top">
-                      <strong>
-                        {user.name ||
-                          user.user_id}
-                      </strong>
+                        name,
+                      )}
                     </div>
 
-                    <div className="peer-card-info-bottom">
-                      <span>
-                        {user.user_id}
-                      </span>
+                    <div className="peer-card-info">
+                      <div className="peer-card-info-top">
+                        <strong>
+                          {name}
+                        </strong>
+                      </div>
 
-                      <span className="live-tag">
-                        live
-                      </span>
+                      <div className="peer-card-info-bottom">
+                        <span>
+                          {user.user_id}
+                        </span>
+
+                        <span className="live-tag">
+                          live
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </button>
-              ),
+                  </button>
+                );
+              },
             )}
 
             {filteredNearbyPeers.map(
