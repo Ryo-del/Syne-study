@@ -563,9 +563,14 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	items, err := history.LoadMessages(strings.TrimSpace(chatID))
+	chatID = strings.TrimSpace(chatID)
+	items, err := history.LoadMessages(chatID)
 	if err != nil {
 		return nil, err
+	}
+	// Новый чат без сообщений — ключа ещё нет, и это не ошибка.
+	if len(items) == 0 {
+		return []UIMessage{}, nil
 	}
 	wrapped, err := history.LoadChatKey(chatID)
 	if err != nil {
@@ -581,8 +586,11 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decrypt message %s: %w", item.MessageID, err)
 		}
+		// From теперь — PeerID отправителя (так требует ValidateMessage).
+		// Старые сообщения в истории могли быть сохранены с логином в From,
+		// поэтому проверяем оба варианта.
 		direction := "incoming"
-		if item.From == session.UserID {
+		if item.From == s.cfg.LocalID || item.From == session.UserID {
 			direction = "outgoing"
 		}
 
@@ -687,14 +695,18 @@ func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
 		return UIMessage{}, fmt.Errorf("encrypt message: %w", err)
 	}
 	msg := protocol.Message{
-		Version:   protocol.ProtocolVersion,
-		Type:      protocol.MsgChat,
-		Target:    protocol.TargetPeer,
-		Strategy:  protocol.StrategyUnknown,
-		TTL:       defaultHopTTL,
-		TargetID:  targetPeerID,
-		ChatID:    chatID,
-		From:      session.UserID,
+		Version:  protocol.ProtocolVersion,
+		Type:     protocol.MsgChat,
+		Target:   protocol.TargetPeer,
+		Strategy: protocol.StrategyUnknown,
+		TTL:      defaultHopTTL,
+		TargetID: targetPeerID,
+		ChatID:   chatID,
+		// ВАЖНО: From обязан быть PeerID, а не логином. ValidateMessage на
+		// стороне получателя сверяет From с PeerID, выведенным из FromPubKey,
+		// и молча отбрасывает пакет при несовпадении — именно поэтому
+		// сообщения "уходили" без ошибок, но не доходили.
+		From:      s.cfg.LocalID,
 		Payload:   encryptedPayload,
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -1029,13 +1041,29 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 			_ = s.node.SendHop(s.ctx, msg, sender.ID.String())
 			return
 		}
+
+		// Реальный автор сообщения. ValidateMessage уже проверил, что From
+		// совпадает с PeerID из подписанного FromPubKey, поэтому ему можно
+		// доверять. sender.ID — это лишь сосед, который передал нам пакет
+		// (при hop-пересылке это не автор), и ключ чата нужно считать
+		// именно с автором.
+		origin := msg.From
+		if origin != sender.ID.String() {
+			if blocked, err := corechat.IsBlocked(origin); err != nil {
+				s.emitError(err)
+				return
+			} else if blocked {
+				return
+			}
+		}
+
 		session, err := s.currentSession()
 		if err != nil {
 			fmt.Printf("handlePacket: msg=%s dropped, not logged in\n", msg.ID)
 			return // не залогинены — не можем расшифровать, просто игнорируем сообщение
 		}
 
-		chatKey, err := s.deriveChatKeyWith(sender.ID.String(), msg.ChatID, session)
+		chatKey, err := s.deriveChatKeyWith(origin, msg.ChatID, session)
 		if err != nil {
 			fmt.Printf("handlePacket: msg=%s derive chat key FAILED: %v\n", msg.ID, err)
 			s.emitError(fmt.Errorf("derive chat key: %w", err))
@@ -1056,8 +1084,8 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 		}
 		if err := history.TouchChat(history.ChatRecord{
 			ChatID:        msg.ChatID,
-			PeerID:        sender.ID.String(),
-			Title:         s.lookupPeerTitle(sender.ID.String()),
+			PeerID:        origin,
+			Title:         s.lookupPeerTitle(origin),
 			LastMessage:   string(plaintext),
 			LastTimestamp: msg.Timestamp,
 		}); err != nil {
@@ -1434,9 +1462,9 @@ func (s *Service) retryOutboxLoop() {
 }
 
 func (s *Service) retryDueOutbox() {
-	session, err := s.currentSession()
-	if err != nil {
-		s.emitError(err)
+	if _, err := s.currentSession(); err != nil {
+		// Пока никто не залогинен — outbox просто ждёт, это не ошибка,
+		// которую нужно показывать пользователю каждые 5 секунд.
 		return
 	}
 	items, err := history.LoadDueOutbox(time.Now().UnixMilli(), 16)
@@ -1446,13 +1474,14 @@ func (s *Service) retryDueOutbox() {
 	}
 	for _, item := range items {
 		msg := protocol.Message{
-			Version:   protocol.ProtocolVersion,
-			Type:      protocol.MsgChat,
-			Target:    protocol.TargetPeer,
-			TTL:       item.TTL,
-			TargetID:  item.TargetID,
-			ChatID:    item.ChatID,
-			From:      session.UserID,
+			Version:  protocol.ProtocolVersion,
+			Type:     protocol.MsgChat,
+			Target:   protocol.TargetPeer,
+			TTL:      item.TTL,
+			TargetID: item.TargetID,
+			ChatID:   item.ChatID,
+			// Тот же принцип, что и в SendMessage: From = PeerID.
+			From:      s.cfg.LocalID,
 			Payload:   item.Payload,
 			Timestamp: item.CreatedAt,
 		}
@@ -1469,6 +1498,11 @@ func (s *Service) retryDueOutbox() {
 		strategy, err := s.routeMessage(msg)
 		if err != nil {
 			_ = history.UpdateOutboxFailure(item.MessageID, err.Error(), time.Now().Add(30*time.Second).UnixMilli())
+			continue
+		}
+		if strategy == protocol.StrategyOffline {
+			// routeMessage снова поставил сообщение в очередь — не удаляем
+			// его из outbox и не помечаем как доставленное.
 			continue
 		}
 		msg.Strategy = strategy

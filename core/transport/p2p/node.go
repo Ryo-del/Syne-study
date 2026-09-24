@@ -389,21 +389,29 @@ func (n *Node) relayPeerSource(ctx context.Context, num int) <-chan peer.AddrInf
 
 func (n *Node) handleStream(stream network.Stream) {
 	defer stream.Close()
+	remotePeer := stream.Conn().RemotePeer()
+
 	_ = stream.SetReadDeadline(time.Now().Add(defaultWriteDeadline))
 	data, err := io.ReadAll(io.LimitReader(stream, defaultReadLimit))
 	if err != nil {
+		fmt.Printf("handleStream: read from %s failed: %v\n", remotePeer, err)
 		return
 	}
 	msg, err := coreprotocol.UnmarshalMessage(data)
 	if err != nil {
+		fmt.Printf("handleStream: bad packet from %s (%d bytes): %v\n", remotePeer, len(data), err)
 		return
 	}
+	// Раньше здесь было молчаливое `return` — именно так пакеты с
+	// From != PeerID пропадали без единой строчки в логе.
 	if err := coreprotocol.ValidateMessage(msg); err != nil {
+		fmt.Printf("handleStream: INVALID packet dropped from=%s msg_id=%s msg_from=%s: %v\n",
+			remotePeer, msg.ID, msg.From, err)
 		return
 	}
 
 	remote := peer.AddrInfo{
-		ID:    stream.Conn().RemotePeer(),
+		ID:    remotePeer,
 		Addrs: []ma.Multiaddr{stream.Conn().RemoteMultiaddr()},
 	}
 	n.rememberPeer(remote)
@@ -430,8 +438,12 @@ func (n *Node) send(ctx context.Context, info peer.AddrInfo, msg coreprotocol.Me
 	}
 	defer stream.Close()
 	_ = stream.SetWriteDeadline(time.Now().Add(defaultWriteDeadline))
-	_, err = stream.Write(wire)
-	return err
+	if _, err := stream.Write(wire); err != nil {
+		return err
+	}
+	// Явно сообщаем получателю "данных больше не будет": он читает
+	// io.ReadAll до EOF.
+	return stream.CloseWrite()
 }
 
 func (n *Node) rememberPeer(info peer.AddrInfo) {
@@ -448,6 +460,10 @@ func (n *Node) rememberPeer(info peer.AddrInfo) {
 	}
 	n.knownPeers[info.ID] = info
 	n.mu.Unlock()
+
+	if len(info.Addrs) > 0 {
+		fmt.Printf("rememberPeer: %s -> %v\n", info.ID, info.Addrs)
+	}
 
 	if n.peerHandler != nil && info.ID != n.host.ID() && !isBootstrapNode(info.ID) {
 		n.peerHandler(info)

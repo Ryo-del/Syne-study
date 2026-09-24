@@ -1049,6 +1049,22 @@ useEffect(() => {
     });
     setChatContextMenu(null);
   }
+  useEffect(() => {
+  if (!authenticated || !selectedChatId) return;
+  let cancelled = false;
+  (async () => {
+    try {
+      const items = await loadMessages(selectedChatId);
+      if (!cancelled) {
+        setMessages((cur) => ({ ...cur, [selectedChatId]: items }));
+      }
+    } catch (err) {
+      if (!cancelled) setError(describeError(err, "Failed to load chat history"));
+    }
+    try { await markChatRead(selectedChatId); } catch { /* ignore */ }
+  })();
+  return () => { cancelled = true; };
+}, [authenticated, selectedChatId]);
   if (!authenticated) {
   return (
     <AuthGate
