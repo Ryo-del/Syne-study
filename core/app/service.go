@@ -205,7 +205,16 @@ func (s *Service) deriveChatKeyWith(peerID, chatID string, session *UserSession)
 	// 1. Пробуем локальный кэш — работает офлайн.
 	wrapped, err := history.LoadChatKey(chatID)
 	if err == nil {
-		return corecrypto.UnwrapKey(wrapped, session.MasterKey)
+		key, uerr := corecrypto.UnwrapKey(wrapped, session.MasterKey)
+		if uerr == nil {
+			return key, nil
+		}
+		// Кэшированный ключ обёрнут ДРУГИМ master key (аккаунт пересоздан,
+		// БД осталась от прошлого запуска). Он бесполезен — выбрасываем и
+		// считаем заново через ECDH.
+		fmt.Printf("deriveChatKeyWith: stale cached key for chat %s (%v), re-deriving\n", chatID, uerr)
+		_ = history.DeleteChatKey(chatID)
+		err = sql.ErrNoRows
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("load cached chat key: %w", err)
@@ -574,17 +583,27 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 	}
 	wrapped, err := history.LoadChatKey(chatID)
 	if err != nil {
-		return nil, fmt.Errorf("chat key not found, cannot decrypt history: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			fmt.Printf("ListMessages: no chat key for %s, history unreadable\n", chatID)
+			return []UIMessage{}, nil
+		}
+		return nil, fmt.Errorf("load chat key: %w", err)
 	}
 	chatKey, err := corecrypto.UnwrapKey(wrapped, session.MasterKey)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt chat key: %w", err)
+		// Ключ чата обёрнут чужим master key (старые данные от другого/
+		// пересозданного аккаунта). Старую историю уже не расшифровать —
+		// сбрасываем ключ, новый посчитается при следующем сообщении.
+		fmt.Printf("ListMessages: stale chat key for %s: %v\n", chatID, err)
+		_ = history.DeleteChatKey(chatID)
+		return []UIMessage{}, nil
 	}
 	messages := make([]UIMessage, 0, len(items))
 	for _, item := range items {
 		plaintext, err := corecrypto.UnwrapKey(item.Payload, chatKey)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt message %s: %w", item.MessageID, err)
+			fmt.Printf("ListMessages: skip undecryptable message %s: %v\n", item.MessageID, err)
+			continue
 		}
 		// From теперь — PeerID отправителя (так требует ValidateMessage).
 		// Старые сообщения в истории могли быть сохранены с логином в From,
@@ -1072,9 +1091,23 @@ func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
 
 		plaintext, err := corecrypto.UnwrapKey(msg.Payload, chatKey)
 		if err != nil {
-			fmt.Printf("handlePacket: msg=%s decrypt FAILED: %v\n", msg.ID, err)
-			s.emitError(fmt.Errorf("decrypt message: %w", err))
-			return
+			// Возможно, у нас в кэше ключ, посчитанный со СТАРЫМ identity-ключом
+			// собеседника (его аккаунт пересоздали). Сбрасываем кэши и
+			// пробуем ещё раз с актуальным ключом.
+			fmt.Printf("handlePacket: msg=%s decrypt failed (%v), retrying with fresh key\n", msg.ID, err)
+			_ = history.DeleteChatKey(msg.ChatID)
+			s.stateMu.Lock()
+			delete(s.identityKeys, origin)
+			s.stateMu.Unlock()
+			chatKey, err = s.deriveChatKeyWith(origin, msg.ChatID, session)
+			if err == nil {
+				plaintext, err = corecrypto.UnwrapKey(msg.Payload, chatKey)
+			}
+			if err != nil {
+				fmt.Printf("handlePacket: msg=%s decrypt FAILED: %v\n", msg.ID, err)
+				s.emitError(fmt.Errorf("decrypt message: %w", err))
+				return
+			}
 		}
 		fmt.Printf("handlePacket: msg=%s decrypted OK, saving to history\n", msg.ID)
 		if err := history.SaveMessage(msg); err != nil {

@@ -126,7 +126,14 @@ func QueueMessage(msg protocol.Message, nextAttemptAt int64) error {
 	)
 	return err
 }
-
+func DeleteChatKey(chatID string) error {
+	database, err := getDB()
+	if err != nil {
+		return err
+	}
+	_, err = database.Exec(`DELETE FROM chat_keys WHERE chat_id = ?`, chatID)
+	return err
+}
 func LoadDueOutbox(nowUnixMilli int64, limit int) ([]OutboxItem, error) {
 	if limit <= 0 {
 		limit = 16
