@@ -27,7 +27,9 @@ function buildUrl(path: string) {
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-
+export function logout() {
+  return request<{ ok: true }>("/api/auth/logout", { method: "POST" });
+}
 function isTransientNetworkError(err: unknown) {
   if (!(err instanceof Error)) {
     return false;
@@ -112,6 +114,7 @@ export function openPrivateChat(payload: {
   peer_id: string;
   peer_addr?: string;
   name?: string;
+  user_id?: string;
 }) {
   return request<ChatSummary>("/api/chats/open", {
     method: "POST",

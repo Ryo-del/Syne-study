@@ -24,6 +24,7 @@ import {
   saveContact,
   sendMessage,
   unblockPeer,
+  logout,
 } from "./lib/api";
 
 import {
@@ -883,7 +884,29 @@ useEffect(() => {
       setSaving(false);
     }
   }
+  async function handleLogout() {
+  try { await logout(); } catch (err) { setError(describeError(err, "Failed to log out")); }
+  startTransition(() => {
+    setAuthenticated(false);
+    setSnapshot(EMPTY_SNAPSHOT);
+    setMessages({});
+    setSelectedChatId("");
+    setComposer("");
+    setShowDetailPanel(false);
+    setSidebarView("chats");
+    setLoading(true);
+  });
+}
 
+// выгрузка данных, если окно закрыли без выхода
+useEffect(() => {
+  if (!authenticated) return;
+  const onUnload = () => {
+    void fetch(new URL("/api/auth/logout", getApiBase()).toString(), { method: "POST", keepalive: true });
+  };
+  window.addEventListener("beforeunload", onUnload);
+  return () => window.removeEventListener("beforeunload", onUnload);
+}, [authenticated]);
   async function handleOpenInvitePeer() {
     const code = invitePeerIdDraft.trim();
     if (!code) {

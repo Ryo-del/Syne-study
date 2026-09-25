@@ -7,7 +7,7 @@ import (
 	p2ptransport "Syne/core/transport/p2p"
 	"context"
 	"crypto/ecdh"
-	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,10 +21,12 @@ import (
 )
 
 const (
-	defaultHopTTL        = 4
-	dedupCapacity        = 1000
 	defaultInviteTTL     = 15 * time.Minute
-	relayFallbackTimeout = 2 * time.Second
+	directSendTimeout    = 2 * time.Second
+	relaySendTimeout     = 8 * time.Second
+	autosaveInterval     = 10 * time.Second
+	mailboxPollInterval  = 4 * time.Second
+	whoamiRefreshMinimum = 20 * time.Second
 )
 
 type Config struct {
@@ -42,6 +44,7 @@ type Snapshot struct {
 	OnlineUsers []OnlineUser           `json:"online_users"`
 	Chats       []ChatSummary          `json:"chats"`
 }
+
 type UserSession struct {
 	UserID             string
 	SessionID          string
@@ -51,6 +54,7 @@ type UserSession struct {
 	FName              string
 	SName              string
 }
+
 type PeerPresence struct {
 	PeerID   string `json:"peer_id"`
 	UserID   string `json:"user_id,omitempty"`
@@ -60,9 +64,7 @@ type PeerPresence struct {
 	Blocked  bool   `json:"blocked"`
 }
 
-// OnlineUser — запись из presence-канала study-сервера: человек сейчас
-// в сети (независимо от того, обнаружен ли он локально по mDNS/DHT).
-// Именно на основе этого списка строится вкладка "Nearby".
+// OnlineUser — запись из presence-канала study-сервера.
 type OnlineUser struct {
 	UserID   string `json:"user_id"`
 	PeerID   string `json:"peer_id"`
@@ -75,6 +77,7 @@ type OnlineUser struct {
 type ChatSummary struct {
 	ChatID        string `json:"chat_id"`
 	PeerID        string `json:"peer_id"`
+	PeerUserID    string `json:"peer_user_id,omitempty"`
 	Title         string `json:"title"`
 	Preview       string `json:"preview"`
 	LastTimestamp int64  `json:"last_timestamp"`
@@ -118,6 +121,30 @@ type rateState struct {
 	last   time.Time
 }
 
+// vaultBlob — то, что уезжает на сервер (после шифрования master key'ем).
+type vaultBlob struct {
+	Version int             `json:"version"`
+	History json.RawMessage `json:"history"`
+	Chat    json.RawMessage `json:"chat"`
+}
+
+// permanentError — сообщение никогда не удастся обработать (чужой адресат,
+// битая подпись/шифртекст). Такие сообщения из mailbox удаляем, остальные
+// оставляем на сервере и пробуем снова.
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+func permanent(format string, a ...any) error {
+	return permanentError{fmt.Errorf(format, a...)}
+}
+
+func isPermanent(err error) bool {
+	var p permanentError
+	return errors.As(err, &p)
+}
+
 type Service struct {
 	cfg Config
 
@@ -126,28 +153,28 @@ type Service struct {
 	identity *corecrypto.Identity
 	node     *p2ptransport.Node
 
-	stateMu      sync.RWMutex
-	neighbors    map[string]PeerPresence
-	onlineUsers  map[string]OnlineUser
-	identityKeys map[string][]byte
-	seen         map[string]time.Time
-	seenOrder    []string
-	unread       map[string]int
-	rateStates   map[string]*rateState
-
-	presenceMu      sync.Mutex
-	presenceStarted bool
-
-	resolveMu       sync.Mutex
-	resolveInFlight map[string]chan struct{}
+	// Всё ниже, кроме session*, — состояние ТЕКУЩЕЙ сессии и сбрасывается при выходе.
+	stateMu     sync.RWMutex
+	neighbors   map[string]PeerPresence
+	onlineUsers map[string]OnlineUser
+	peerKeys    map[string][]byte // login -> X25519 public key
+	peerNames   map[string]string // login -> "Имя Фамилия"
+	chatKeys    map[string][]byte // chatID -> ключ чата
+	unread      map[string]int
+	rateStates  map[string]*rateState
+	whoamiAt    map[string]time.Time
 
 	subMu       sync.RWMutex
 	subscribers map[chan Event]struct{}
 
-	sessionMu sync.RWMutex
-	session   *UserSession
+	sessionMu  sync.RWMutex
+	session    *UserSession
+	sessCancel context.CancelFunc
+	sessGen    uint64
+	sessWG     sync.WaitGroup
 
-	wg sync.WaitGroup
+	flushMu  sync.Mutex
+	savedVer uint64
 }
 
 func New(config Config) (*Service, error) {
@@ -162,131 +189,32 @@ func New(config Config) (*Service, error) {
 			Port:       config.Port,
 			ServerAddr: config.ServerAddr,
 		},
-		ctx:             ctx,
-		cancel:          cancel,
-		identity:        identity,
-		neighbors:       make(map[string]PeerPresence),
-		onlineUsers:     make(map[string]OnlineUser),
-		identityKeys:    make(map[string][]byte),
-		seen:            make(map[string]time.Time),
-		unread:          make(map[string]int),
-		rateStates:      make(map[string]*rateState),
-		resolveInFlight: make(map[string]chan struct{}),
-		subscribers:     make(map[chan Event]struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
+		identity:    identity,
+		neighbors:   make(map[string]PeerPresence),
+		onlineUsers: make(map[string]OnlineUser),
+		peerKeys:    make(map[string][]byte),
+		peerNames:   make(map[string]string),
+		chatKeys:    make(map[string][]byte),
+		unread:      make(map[string]int),
+		rateStates:  make(map[string]*rateState),
+		whoamiAt:    make(map[string]time.Time),
+		subscribers: make(map[chan Event]struct{}),
 	}, nil
 }
-func (s *Service) resolveIdentityKey(peerID string) ([]byte, error) {
-	s.stateMu.RLock()
-	if key, ok := s.identityKeys[peerID]; ok {
-		s.stateMu.RUnlock()
-		return key, nil
-	}
-	s.stateMu.RUnlock()
 
-	var lastErr error
-	for attempt, timeout := range []time.Duration{10 * time.Second, 20 * time.Second} {
-		ctx, cancel := context.WithTimeout(s.ctx, timeout)
-		resp, err := s.node.GetIdentityKey(ctx, peerID)
-		cancel()
-		if err == nil {
-			s.stateMu.Lock()
-			s.identityKeys[peerID] = resp.IdentityPublicKey
-			s.stateMu.Unlock()
-			return resp.IdentityPublicKey, nil
-		}
-		lastErr = err
-		if attempt == 0 {
-			fmt.Printf("resolve identity key for peer %s: attempt %d failed, retrying with longer timeout: %v\n", peerID, attempt+1, err)
-		}
-	}
-	return nil, fmt.Errorf("resolve identity key for peer %s: %w", peerID, lastErr)
-}
-func (s *Service) deriveChatKeyWith(peerID, chatID string, session *UserSession) ([]byte, error) {
-	// 1. Пробуем локальный кэш — работает офлайн.
-	wrapped, err := history.LoadChatKey(chatID)
-	if err == nil {
-		key, uerr := corecrypto.UnwrapKey(wrapped, session.MasterKey)
-		if uerr == nil {
-			return key, nil
-		}
-		// Кэшированный ключ обёрнут ДРУГИМ master key (аккаунт пересоздан,
-		// БД осталась от прошлого запуска). Он бесполезен — выбрасываем и
-		// считаем заново через ECDH.
-		fmt.Printf("deriveChatKeyWith: stale cached key for chat %s (%v), re-deriving\n", chatID, uerr)
-		_ = history.DeleteChatKey(chatID)
-		err = sql.ErrNoRows
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("load cached chat key: %w", err)
-	}
+// ======================= lifecycle =======================
 
-	// 2. Ключа ещё нет — вычисляем через сеть (нужен собеседник онлайн).
-	remotePubBytes, err := s.resolveIdentityKey(peerID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve remote identity key: %w", err)
-	}
-
-	localPriv, err := ecdh.X25519().NewPrivateKey(session.IdentityPrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("parse local identity key: %w", err)
-	}
-
-	remotePub, err := ecdh.X25519().NewPublicKey(remotePubBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse remote identity key: %w", err)
-	}
-
-	chatKey, err := corecrypto.DeriveChatKey(localPriv, remotePub, chatID)
-	if err != nil {
-		return nil, fmt.Errorf("derive chat key: %w", err)
-	}
-
-	// 3. Сохраняем в кэш на будущее — теперь офлайн-доступ работает.
-	wrappedNew, err := corecrypto.WrapKey(chatKey, session.MasterKey)
-	if err != nil {
-		return nil, fmt.Errorf("wrap chat key for cache: %w", err)
-	}
-	if err := history.SaveChatKey(chatID, wrappedNew); err != nil {
-		return nil, fmt.Errorf("save chat key to cache: %w", err)
-	}
-
-	return chatKey, nil
-}
-func (s *Service) CurrentUserInfo() (userID, fname, sname string, ok bool) {
-	s.sessionMu.RLock()
-	defer s.sessionMu.RUnlock()
-	if s.session == nil {
-		return "", "", "", false
-	}
-	return s.session.UserID, s.session.FName, s.session.SName, true
-
-}
 func (s *Service) Start() error {
-	if err := history.UpsertPeerAlias(s.cfg.LocalID, "You"); err != nil {
-		return err
-	}
-	if err := history.TouchChat(history.ChatRecord{}); err != nil {
-		return err
-	}
 	node, err := p2ptransport.NewNode(s.ctx, s.identity, s.handlePacket, s.handlePeer)
 	if err != nil {
 		return err
 	}
 	s.node = node
-	if err := s.bootstrapContactHints(); err != nil {
-		return err
-	}
 
 	serverAddr := strings.TrimSpace(s.cfg.ServerAddr)
 	if serverAddr == "" {
-		// Автопоиск по умолчанию: ищем study-сервер в локальной сети через
-		// mDNS вместо того чтобы требовать ручной адрес. mDNS работает
-		// только в пределах одного сегмента сети (одна точка доступа/
-		// свитч) — если сервер за роутером или в другой подсети, здесь
-		// ничего не найдётся, и приложение просто продолжит без сервера,
-		// как и раньше при пустом ServerAddr. Ручной адрес (флаг
-		// --server-addr / файл конфигурации на клиенте) остаётся рабочим
-		// запасным вариантом именно для таких сетей.
 		discoverCtx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 		found, discErr := s.node.DiscoverStudyServer(discoverCtx, 5*time.Second)
 		cancel()
@@ -298,7 +226,6 @@ func (s *Service) Start() error {
 			s.cfg.ServerAddr = found
 		}
 	}
-
 	if serverAddr != "" {
 		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 		welcome, err := s.node.ConnectToServer(ctx, serverAddr)
@@ -312,18 +239,15 @@ func (s *Service) Start() error {
 	}
 	s.node.SetWhoAmIHandler(s)
 	s.node.SetIdentityKeyHandler(s)
-	s.wg.Add(1)
-	go s.retryOutboxLoop()
 	return nil
 }
 
 func (s *Service) Stop() {
+	_ = s.endSession() // выгрузит данные на сервер
 	s.cancel()
 	if s.node != nil {
 		_ = s.node.Close()
 	}
-	s.wg.Wait()
-
 	s.subMu.Lock()
 	for ch := range s.subscribers {
 		close(ch)
@@ -331,6 +255,432 @@ func (s *Service) Stop() {
 	s.subscribers = map[chan Event]struct{}{}
 	s.subMu.Unlock()
 }
+
+func (s *Service) Login(login, password string) error {
+	result, err := s.node.Login(s.ctx, s.cfg.ServerAddr, login, password)
+	if err != nil {
+		return err
+	}
+	return s.beginSession(login, result)
+}
+
+func (s *Service) Register(login, fname, sname, password string) error {
+	if _, err := s.node.Register(s.ctx, s.cfg.ServerAddr, login, fname, sname, password); err != nil {
+		return err
+	}
+	return s.Login(login, password)
+}
+
+func (s *Service) ClaimAccount(login, claimCode, newPassword string) error {
+	result, err := s.node.ClaimAccount(s.ctx, s.cfg.ServerAddr, login, claimCode, newPassword)
+	if err != nil {
+		return err
+	}
+	return s.beginSession(login, result)
+}
+
+func (s *Service) Logout() error {
+	return s.endSession()
+}
+
+// beginSession: закрывает предыдущую сессию (с выгрузкой её данных), скачивает
+// vault нового пользователя и запускает фоновые циклы.
+func (s *Service) beginSession(login string, r *p2ptransport.LoginResult) error {
+	_ = s.endSession()
+
+	sess := &UserSession{
+		UserID:             login,
+		SessionID:          r.SessionID,
+		MasterKey:          r.MasterKey,
+		IdentityPrivateKey: r.IdentityPrivateKey,
+		IdentityPublicKey:  r.IdentityPublicKey,
+		FName:              r.FName,
+		SName:              r.SName,
+	}
+
+	if err := s.loadVault(sess); err != nil {
+		s.dropServerSession(sess)
+		history.Reset()
+		corechat.Reset()
+		return err
+	}
+
+	sessCtx, cancel := context.WithCancel(s.ctx)
+	s.sessionMu.Lock()
+	s.sessGen++
+	gen := s.sessGen
+	s.session = sess
+	s.sessCancel = cancel
+	s.sessionMu.Unlock()
+
+	s.sessWG.Add(2)
+	go s.autosaveLoop(sessCtx, sess)
+	go s.mailboxLoop(sessCtx, sess)
+	go s.startPresence(sessCtx, sess, gen)
+
+	s.emit(Event{Type: "logged_in", Timestamp: time.Now().UnixMilli()})
+	return nil
+}
+
+// endSession: остановить циклы -> выгрузить vault -> закрыть сессию на
+// сервере -> стереть ВСЁ из памяти. После этого на ПК не остаётся ничего.
+func (s *Service) endSession() error {
+	s.sessionMu.Lock()
+	sess := s.session
+	cancel := s.sessCancel
+	s.session = nil
+	s.sessCancel = nil
+	s.sessionMu.Unlock()
+	if sess == nil {
+		return fmt.Errorf("not logged in")
+	}
+
+	cancel()
+	s.sessWG.Wait()
+
+	var flushErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if flushErr = s.flushVault(sess, true); flushErr == nil {
+			break
+		}
+		fmt.Printf("logout: vault upload attempt %d failed: %v\n", attempt+1, flushErr)
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	s.dropServerSession(sess)
+	s.resetSessionState()
+	s.emit(Event{Type: "logged_out", Timestamp: time.Now().UnixMilli()})
+	if flushErr != nil {
+		return fmt.Errorf("history could not be saved to the server: %w", flushErr)
+	}
+	return nil
+}
+
+func (s *Service) dropServerSession(sess *UserSession) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.node.SyncLogout(ctx, s.cfg.ServerAddr, sess.SessionID)
+}
+
+func (s *Service) resetSessionState() {
+	history.Reset()
+	corechat.Reset()
+	s.stateMu.Lock()
+	s.onlineUsers = make(map[string]OnlineUser)
+	s.peerKeys = make(map[string][]byte)
+	s.peerNames = make(map[string]string)
+	s.chatKeys = make(map[string][]byte)
+	s.unread = make(map[string]int)
+	s.whoamiAt = make(map[string]time.Time)
+	for id, n := range s.neighbors {
+		n.UserID = ""
+		n.Name = id
+		s.neighbors[id] = n
+	}
+	s.stateMu.Unlock()
+}
+
+// ======================= vault =======================
+
+func (s *Service) loadVault(sess *UserSession) error {
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+
+	data, exists, err := s.node.VaultGet(ctx, s.cfg.ServerAddr, sess.SessionID)
+	if err != nil {
+		return fmt.Errorf("load data from server: %w", err)
+	}
+
+	history.Reset()
+	corechat.Reset()
+	if exists {
+		plain, err := corecrypto.UnwrapKey(data, sess.MasterKey)
+		if err != nil {
+			// Не перезаписываем чужой/испорченный vault пустым — просто не пускаем.
+			return fmt.Errorf("server data cannot be decrypted with this account's key: %w", err)
+		}
+		var blob vaultBlob
+		if err := json.Unmarshal(plain, &blob); err != nil {
+			return fmt.Errorf("parse server data: %w", err)
+		}
+		if len(blob.History) > 0 {
+			if err := history.Import(blob.History); err != nil {
+				return fmt.Errorf("import history: %w", err)
+			}
+		}
+		if len(blob.Chat) > 0 {
+			if err := corechat.Import(blob.Chat); err != nil {
+				return fmt.Errorf("import contacts: %w", err)
+			}
+		}
+	}
+
+	s.flushMu.Lock()
+	s.savedVer = history.Version() + corechat.Version()
+	s.flushMu.Unlock()
+	return nil
+}
+
+func (s *Service) flushVault(sess *UserSession, force bool) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+
+	ver := history.Version() + corechat.Version()
+	if !force && ver == s.savedVer {
+		return nil
+	}
+	hist, err := history.Export()
+	if err != nil {
+		return err
+	}
+	chatData, err := corechat.Export()
+	if err != nil {
+		return err
+	}
+	blob, err := json.Marshal(vaultBlob{Version: 1, History: hist, Chat: chatData})
+	if err != nil {
+		return err
+	}
+	enc, err := corecrypto.WrapKey(blob, sess.MasterKey)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.node.VaultPut(ctx, s.cfg.ServerAddr, sess.SessionID, enc); err != nil {
+		return err
+	}
+	s.savedVer = ver
+	return nil
+}
+
+func (s *Service) autosaveLoop(ctx context.Context, sess *UserSession) {
+	defer s.sessWG.Done()
+	ticker := time.NewTicker(autosaveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.flushVault(sess, false); err != nil {
+				fmt.Printf("autosave: %v\n", err)
+			}
+		}
+	}
+}
+
+// ======================= mailbox =======================
+
+func (s *Service) mailboxLoop(ctx context.Context, sess *UserSession) {
+	defer s.sessWG.Done()
+	s.pollMailbox(ctx, sess)
+	ticker := time.NewTicker(mailboxPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pollMailbox(ctx, sess)
+		}
+	}
+}
+
+func (s *Service) pollMailbox(ctx context.Context, sess *UserSession) {
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	items, err := s.node.MailboxFetch(fetchCtx, s.cfg.ServerAddr, sess.SessionID)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			fmt.Printf("mailbox fetch: %v\n", err)
+		}
+		return
+	}
+	var ack []int64
+	for _, item := range items {
+		msg, err := protocol.UnmarshalMessage(item.Data)
+		if err != nil {
+			ack = append(ack, item.ID)
+			continue
+		}
+		if err := protocol.ValidateMessage(msg); err != nil {
+			fmt.Printf("mailbox: dropping invalid message %d: %v\n", item.ID, err)
+			ack = append(ack, item.ID)
+			continue
+		}
+		if msg.Type != protocol.MsgChat {
+			ack = append(ack, item.ID)
+			continue
+		}
+		err = s.ingestChat(sess, msg, "offline")
+		if err == nil || isPermanent(err) {
+			if err != nil {
+				fmt.Printf("mailbox: dropping message %d: %v\n", item.ID, err)
+			}
+			ack = append(ack, item.ID)
+			continue
+		}
+		fmt.Printf("mailbox: message %d will be retried: %v\n", item.ID, err)
+	}
+	if len(ack) > 0 {
+		ackCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := s.node.MailboxAck(ackCtx, s.cfg.ServerAddr, sess.SessionID, ack); err != nil {
+			fmt.Printf("mailbox ack: %v\n", err)
+		}
+		cancel()
+	}
+}
+
+// ======================= presence =======================
+
+func (s *Service) genIs(gen uint64) bool {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return s.session != nil && s.sessGen == gen
+}
+
+func (s *Service) startPresence(ctx context.Context, sess *UserSession, gen uint64) {
+	if strings.TrimSpace(s.cfg.ServerAddr) == "" {
+		return
+	}
+	err := s.node.StartPresence(
+		ctx,
+		s.cfg.ServerAddr,
+		sess.UserID,
+		sess.FName,
+		sess.SName,
+		func(users []protocol.PresenceUser) { s.onPresenceSnapshot(gen, users) },
+		func(u protocol.PresenceUser, status string) { s.onPresenceUpdate(gen, u, status) },
+	)
+	if err != nil && ctx.Err() == nil {
+		s.emitError(fmt.Errorf("start presence: %w", err))
+	}
+}
+
+func (s *Service) onPresenceSnapshot(gen uint64, users []protocol.PresenceUser) {
+	if !s.genIs(gen) {
+		return
+	}
+	now := time.Now().UnixMilli()
+	s.stateMu.Lock()
+	s.onlineUsers = make(map[string]OnlineUser, len(users))
+	for _, u := range users {
+		s.onlineUsers[u.UserID] = OnlineUser{
+			UserID: u.UserID, PeerID: u.PeerID, FName: u.FName, SName: u.SName,
+			Online: true, LastSeen: now,
+		}
+	}
+	s.stateMu.Unlock()
+	s.emit(Event{Type: "online_snapshot", Timestamp: now})
+}
+
+func (s *Service) onPresenceUpdate(gen uint64, user protocol.PresenceUser, status string) {
+	if !s.genIs(gen) {
+		return
+	}
+	now := time.Now().UnixMilli()
+	online := status == protocol.PresenceStatusOnline
+	entry := OnlineUser{
+		UserID: user.UserID, PeerID: user.PeerID, FName: user.FName, SName: user.SName,
+		Online: online, LastSeen: now,
+	}
+	s.stateMu.Lock()
+	if online {
+		s.onlineUsers[user.UserID] = entry
+	} else {
+		delete(s.onlineUsers, user.UserID)
+	}
+	s.stateMu.Unlock()
+	s.emit(Event{Type: "online_user_updated", Timestamp: now, OnlineUser: &entry})
+}
+
+// ======================= session accessors =======================
+
+func (s *Service) currentSession() (*UserSession, error) {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	if s.session == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	return s.session, nil
+}
+
+func (s *Service) CurrentUserInfo() (userID, fname, sname string, ok bool) {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	if s.session == nil {
+		return "", "", "", false
+	}
+	return s.session.UserID, s.session.FName, s.session.SName, true
+}
+
+func (s *Service) CurrentIdentityPublicKey() ([]byte, bool) {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	if s.session == nil {
+		return nil, false
+	}
+	return s.session.IdentityPublicKey, true
+}
+
+// ======================= keys =======================
+
+func (s *Service) peerPublicKey(sess *UserSession, userID string) ([]byte, error) {
+	s.stateMu.RLock()
+	key, ok := s.peerKeys[userID]
+	s.stateMu.RUnlock()
+	if ok {
+		return key, nil
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	defer cancel()
+	resp, err := s.node.KeyLookup(ctx, s.cfg.ServerAddr, sess.SessionID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("look up key of %q: %w", userID, err)
+	}
+	s.stateMu.Lock()
+	s.peerKeys[userID] = resp.IdentityPublicKey
+	if name := strings.TrimSpace(resp.FName + " " + resp.SName); name != "" {
+		s.peerNames[userID] = name
+	}
+	s.stateMu.Unlock()
+	return resp.IdentityPublicKey, nil
+}
+
+// chatKeyFor: ключ чата детерминированно считается из своего приватного и
+// публичного ключа собеседника (его отдаёт сервер). Ничего не хранится на
+// диске и не может "устареть" — поэтому ошибок вида "decrypt chat key" больше нет.
+func (s *Service) chatKeyFor(sess *UserSession, peerUser, chatID string) ([]byte, error) {
+	s.stateMu.RLock()
+	key, ok := s.chatKeys[chatID]
+	s.stateMu.RUnlock()
+	if ok {
+		return key, nil
+	}
+	pubBytes, err := s.peerPublicKey(sess, peerUser)
+	if err != nil {
+		return nil, err
+	}
+	localPriv, err := ecdh.X25519().NewPrivateKey(sess.IdentityPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("parse local identity key: %w", err)
+	}
+	remotePub, err := ecdh.X25519().NewPublicKey(pubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse remote identity key: %w", err)
+	}
+	key, err = corecrypto.DeriveChatKey(localPriv, remotePub, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("derive chat key: %w", err)
+	}
+	s.stateMu.Lock()
+	s.chatKeys[chatID] = key
+	s.stateMu.Unlock()
+	return key, nil
+}
+
+// ======================= snapshot / events =======================
 
 func (s *Service) Snapshot() (Snapshot, error) {
 	contacts, err := corechat.ListContacts()
@@ -370,7 +720,6 @@ func (s *Service) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-
 	return Snapshot{
 		LocalID:     s.cfg.LocalID,
 		Port:        s.cfg.Port,
@@ -381,174 +730,7 @@ func (s *Service) Snapshot() (Snapshot, error) {
 		Chats:       chats,
 	}, nil
 }
-func (s *Service) Login(login, password string) error {
-	result, err := s.node.Login(s.ctx, s.cfg.ServerAddr, login, password)
-	if err != nil {
-		return err
-	}
-	s.sessionMu.Lock()
-	s.session = &UserSession{
-		UserID:             login,
-		SessionID:          result.SessionID,
-		MasterKey:          result.MasterKey,
-		IdentityPrivateKey: result.IdentityPrivateKey,
-		IdentityPublicKey:  result.IdentityPublicKey,
-		FName:              result.FName,
-		SName:              result.SName,
-	}
-	s.sessionMu.Unlock()
-	s.emit(Event{
-		Type:      "logged_in",
-		Timestamp: time.Now().UnixMilli(),
-	})
-	s.startPresence()
-	return nil
-}
-func (s *Service) Register(login, fname, sname, password string) error {
-	if _, err := s.node.Register(s.ctx, s.cfg.ServerAddr, login, fname, sname, password); err != nil {
-		return err
-	}
 
-	return s.Login(login, password)
-}
-func (s *Service) ClaimAccount(login, claimCode, newPassword string) error {
-	result, err := s.node.ClaimAccount(s.ctx, s.cfg.ServerAddr, login, claimCode, newPassword)
-	if err != nil {
-		return err
-	}
-	s.sessionMu.Lock()
-	s.session = &UserSession{
-		UserID:             login,
-		SessionID:          result.SessionID,
-		MasterKey:          result.MasterKey,
-		IdentityPrivateKey: result.IdentityPrivateKey,
-		IdentityPublicKey:  result.IdentityPublicKey,
-		FName:              result.FName,
-		SName:              result.SName,
-	}
-	s.sessionMu.Unlock()
-	s.emit(Event{
-		Type:      "logged_in",
-		Timestamp: time.Now().UnixMilli(),
-	})
-	s.startPresence()
-	return nil
-}
-
-// startPresence сообщает study-серверу "я в сети" и начинает слушать
-// обновления о других пользователях (см. Syne-protocol/presence.go).
-// Идемпотентна — повторный вызов в рамках одного запуска процесса
-// ничего не делает.
-func (s *Service) startPresence() {
-	s.presenceMu.Lock()
-	if s.presenceStarted {
-		s.presenceMu.Unlock()
-		return
-	}
-	s.presenceStarted = true
-	s.presenceMu.Unlock()
-
-	if strings.TrimSpace(s.cfg.ServerAddr) == "" {
-		return // нет study-сервера — presence недоступен (чистый P2P-режим)
-	}
-
-	session, err := s.currentSession()
-	if err != nil {
-		return
-	}
-
-	go func() {
-		err := s.node.StartPresence(
-			s.ctx,
-			s.cfg.ServerAddr,
-			session.UserID,
-			session.FName,
-			session.SName,
-			s.onPresenceSnapshot,
-			s.onPresenceUpdate,
-		)
-		if err != nil {
-			s.emitError(fmt.Errorf("start presence: %w", err))
-		}
-	}()
-}
-
-func (s *Service) onPresenceSnapshot(users []protocol.PresenceUser) {
-	now := time.Now().UnixMilli()
-	s.stateMu.Lock()
-	for _, u := range users {
-		s.onlineUsers[u.UserID] = OnlineUser{
-			UserID:   u.UserID,
-			PeerID:   u.PeerID,
-			FName:    u.FName,
-			SName:    u.SName,
-			Online:   true,
-			LastSeen: now,
-		}
-	}
-	s.stateMu.Unlock()
-
-	s.emit(Event{
-		Type:      "online_snapshot",
-		Timestamp: now,
-	})
-}
-
-func (s *Service) onPresenceUpdate(user protocol.PresenceUser, status string) {
-	now := time.Now().UnixMilli()
-	online := status == protocol.PresenceStatusOnline
-
-	entry := OnlineUser{
-		UserID:   user.UserID,
-		PeerID:   user.PeerID,
-		FName:    user.FName,
-		SName:    user.SName,
-		Online:   online,
-		LastSeen: now,
-	}
-
-	s.stateMu.Lock()
-	if online {
-		s.onlineUsers[user.UserID] = entry
-	} else {
-		delete(s.onlineUsers, user.UserID)
-	}
-	s.stateMu.Unlock()
-
-	s.emit(Event{
-		Type:       "online_user_updated",
-		Timestamp:  now,
-		OnlineUser: &entry,
-	})
-}
-
-func (s *Service) currentSession() (*UserSession, error) {
-	defer s.sessionMu.RUnlock()
-	s.sessionMu.RLock()
-	if s.session == nil {
-		return nil, fmt.Errorf("not logged in")
-	}
-	return s.session, nil
-
-}
-func (s *Service) CurrentIdentityPublicKey() ([]byte, bool) {
-	s.sessionMu.RLock()
-	defer s.sessionMu.RUnlock()
-	if s.session == nil {
-		return nil, false
-	}
-	return s.session.IdentityPublicKey, true
-}
-func (s *Service) Logout() error {
-	defer s.sessionMu.Unlock()
-	s.sessionMu.Lock()
-	if s.session == nil {
-		return fmt.Errorf("not logged in")
-	}
-	// TODO: здесь позже появится вызов синхронизации истории на сервер, до очистки session
-	s.session = nil
-	return nil
-}
 func (s *Service) Subscribe(buffer int) (<-chan Event, func()) {
 	if buffer <= 0 {
 		buffer = 32
@@ -567,209 +749,350 @@ func (s *Service) Subscribe(buffer int) (<-chan Event, func()) {
 	}
 }
 
+func (s *Service) emit(event Event) {
+	s.subMu.RLock()
+	defer s.subMu.RUnlock()
+	for ch := range s.subscribers {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
+}
+
+func (s *Service) emitError(err error) {
+	if err == nil {
+		return
+	}
+	s.emit(Event{Type: "error", Timestamp: time.Now().UnixMilli(), Error: err.Error()})
+}
+
+// ======================= chats =======================
+
 func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
-	session, err := s.currentSession()
-	if err != nil {
+	if _, err := s.currentSession(); err != nil {
 		return nil, err
 	}
-	chatID = strings.TrimSpace(chatID)
-	items, err := history.LoadMessages(chatID)
-	if err != nil {
-		return nil, err
-	}
-	// Новый чат без сообщений — ключа ещё нет, и это не ошибка.
-	if len(items) == 0 {
-		return []UIMessage{}, nil
-	}
-	wrapped, err := history.LoadChatKey(chatID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			fmt.Printf("ListMessages: no chat key for %s, history unreadable\n", chatID)
-			return []UIMessage{}, nil
-		}
-		return nil, fmt.Errorf("load chat key: %w", err)
-	}
-	chatKey, err := corecrypto.UnwrapKey(wrapped, session.MasterKey)
-	if err != nil {
-		// Ключ чата обёрнут чужим master key (старые данные от другого/
-		// пересозданного аккаунта). Старую историю уже не расшифровать —
-		// сбрасываем ключ, новый посчитается при следующем сообщении.
-		fmt.Printf("ListMessages: stale chat key for %s: %v\n", chatID, err)
-		_ = history.DeleteChatKey(chatID)
-		return []UIMessage{}, nil
-	}
-	messages := make([]UIMessage, 0, len(items))
-	for _, item := range items {
-		plaintext, err := corecrypto.UnwrapKey(item.Payload, chatKey)
-		if err != nil {
-			fmt.Printf("ListMessages: skip undecryptable message %s: %v\n", item.MessageID, err)
-			continue
-		}
-		// From теперь — PeerID отправителя (так требует ValidateMessage).
-		// Старые сообщения в истории могли быть сохранены с логином в From,
-		// поэтому проверяем оба варианта.
+	items := history.LoadMessages(strings.TrimSpace(chatID))
+	out := make([]UIMessage, 0, len(items))
+	for _, m := range items {
 		direction := "incoming"
-		if item.From == s.cfg.LocalID || item.From == session.UserID {
+		if m.Outgoing {
 			direction = "outgoing"
 		}
-
-		messages = append(messages, UIMessage{
-			MessageID: item.MessageID,
-			ChatID:    item.ChatID,
-			TargetID:  item.TargetID,
-			From:      item.From,
-			Text:      string(plaintext),
-			Timestamp: item.Timestamp,
+		out = append(out, UIMessage{
+			MessageID: m.MessageID,
+			ChatID:    m.ChatID,
+			TargetID:  m.TargetID,
+			From:      m.From,
+			Text:      m.Text,
+			Timestamp: m.Timestamp,
 			Direction: direction,
-			Strategy:  item.Strategy.String(),
+			Strategy:  m.Strategy,
 		})
 	}
-	return messages, nil
+	return out, nil
 }
 
 func (s *Service) ClearChatHistory() error {
-	if err := history.ClearChatHistory(); err != nil {
+	if _, err := s.currentSession(); err != nil {
 		return err
 	}
+	history.ClearChatHistory()
 	s.stateMu.Lock()
 	s.unread = make(map[string]int)
 	s.stateMu.Unlock()
-	s.emit(Event{
-		Type:      "chat_history_deleted",
-		Timestamp: time.Now().UnixMilli(),
-	})
+	s.emit(Event{Type: "chat_history_deleted", Timestamp: time.Now().UnixMilli()})
 	return nil
 }
 
-func (s *Service) OpenPrivateChat(peerID, peerAddr, name string) (ChatSummary, error) {
-	peerID = strings.TrimSpace(peerID)
-	session, err := s.currentSession()
+// OpenPrivateChat открывает чат с ПОЛЬЗОВАТЕЛЕМ, а не с устройством.
+// userID (если фронтенд его знает) имеет приоритет; иначе логин берётся из
+// presence-списка сервера по peerID — никаких кэшей "peer -> user", которые
+// устаревают, когда за тем же ПК заходит другой аккаунт.
+func (s *Service) OpenPrivateChat(peerID, peerAddr, name, userID string) (ChatSummary, error) {
+	sess, err := s.currentSession()
 	if err != nil {
 		return ChatSummary{}, err
 	}
+	peerID = strings.TrimSpace(peerID)
 	peerAddr = strings.TrimSpace(peerAddr)
 	name = strings.TrimSpace(name)
-	if peerID == "" {
+	peerUser := strings.TrimSpace(userID)
+
+	if peerID == "" && peerUser == "" {
 		return ChatSummary{}, fmt.Errorf("peer_id is required")
 	}
-	if blocked, err := corechat.IsBlocked(peerID); err != nil {
-		return ChatSummary{}, err
-	} else if blocked {
-		return ChatSummary{}, fmt.Errorf("peer is blocked: %s", peerID)
+	if peerID != "" {
+		if blocked, err := corechat.IsBlocked(peerID); err != nil {
+			return ChatSummary{}, err
+		} else if blocked {
+			return ChatSummary{}, fmt.Errorf("peer is blocked: %s", peerID)
+		}
+		if peerAddr != "" && s.node != nil {
+			_ = s.node.RememberHint(peerID, peerAddr)
+		}
 	}
-	if peerAddr != "" && s.node != nil {
-		_ = s.node.RememberHint(peerID, peerAddr)
+	if peerUser == "" {
+		peerUser, err = s.resolveUserID(peerID)
+		if err != nil {
+			return ChatSummary{}, err
+		}
 	}
-	targetUserID, err := s.resolveUserID(peerID)
-	if err != nil {
-		return ChatSummary{}, err
+	if peerUser == sess.UserID {
+		return ChatSummary{}, fmt.Errorf("cannot open a chat with yourself")
 	}
-	chatID := privateChatID(session.UserID, targetUserID)
-	title := name
+	if peerID == "" {
+		peerID = s.peerIDForUser(peerUser)
+	}
+
+	title := s.displayName(peerUser)
 	if title == "" {
-		title = s.lookupPeerTitle(peerID)
+		title = name
 	}
-	if err := history.TouchChat(history.ChatRecord{
-		ChatID: chatID,
-		PeerID: peerID,
-		Title:  title,
-	}); err != nil {
-		return ChatSummary{}, err
+	if title == "" {
+		title = peerUser
 	}
-	summary, err := s.chatSummaryByID(chatID)
-	if err != nil {
-		return ChatSummary{}, err
-	}
-	return summary, nil
+	chatID := privateChatID(sess.UserID, peerUser)
+	history.TouchChat(history.ChatRecord{
+		ChatID:     chatID,
+		PeerID:     peerID,
+		PeerUserID: peerUser,
+		Title:      title,
+	})
+	return s.chatSummaryByID(chatID)
 }
 
-func (s *Service) SendMessage(targetPeerID, text string) (UIMessage, error) {
-	session, err := s.currentSession()
+func (s *Service) SendMessage(chatID, targetPeerID, text string) (UIMessage, error) {
+	sess, err := s.currentSession()
 	if err != nil {
 		return UIMessage{}, err
 	}
-	targetPeerID = strings.TrimSpace(targetPeerID)
+	chatID = strings.TrimSpace(chatID)
 	text = strings.TrimSpace(text)
-	if targetPeerID == "" || text == "" {
-		return UIMessage{}, fmt.Errorf("chat_id, target_id and text are required")
+	if chatID == "" || text == "" {
+		return UIMessage{}, fmt.Errorf("chat_id and text are required")
 	}
-	if blocked, err := corechat.IsBlocked(targetPeerID); err != nil {
-		return UIMessage{}, err
-	} else if blocked {
-		return UIMessage{}, fmt.Errorf("peer is blocked: %s", targetPeerID)
+	rec, ok := history.GetChatRecord(chatID)
+	if !ok || rec.PeerUserID == "" {
+		return UIMessage{}, fmt.Errorf("chat not found: %s", chatID)
 	}
-	targetUserID, err := s.resolveUserID(targetPeerID)
+	if rec.PeerID != "" {
+		if blocked, _ := corechat.IsBlocked(rec.PeerID); blocked {
+			return UIMessage{}, fmt.Errorf("peer is blocked: %s", rec.PeerID)
+		}
+	}
+
+	key, err := s.chatKeyFor(sess, rec.PeerUserID, chatID)
 	if err != nil {
 		return UIMessage{}, err
 	}
-
-	chatID := privateChatID(session.UserID, targetUserID)
-	chatKey, err := s.deriveChatKeyWith(targetPeerID, chatID, session)
-	if err != nil {
-		return UIMessage{}, fmt.Errorf("derive chat key: %w", err)
-	}
-
-	encryptedPayload, err := corecrypto.WrapKey([]byte(text), chatKey)
+	payload, err := corecrypto.WrapKey([]byte(text), key)
 	if err != nil {
 		return UIMessage{}, fmt.Errorf("encrypt message: %w", err)
 	}
+
+	peerOnline := s.isUserOnline(rec.PeerUserID)
+	targetPeer := s.peerIDForUser(rec.PeerUserID)
+	if targetPeer == "" {
+		targetPeer = rec.PeerID
+	}
+	if targetPeer == "" {
+		targetPeer = strings.TrimSpace(targetPeerID)
+	}
+	if targetPeer == "" {
+		targetPeer = "offline"
+	}
+
 	msg := protocol.Message{
 		Version:  protocol.ProtocolVersion,
 		Type:     protocol.MsgChat,
 		Target:   protocol.TargetPeer,
 		Strategy: protocol.StrategyUnknown,
-		TTL:      defaultHopTTL,
-		TargetID: targetPeerID,
+		TTL:      1,
+		TargetID: targetPeer,
 		ChatID:   chatID,
-		// ВАЖНО: From обязан быть PeerID, а не логином. ValidateMessage на
-		// стороне получателя сверяет From с PeerID, выведенным из FromPubKey,
-		// и молча отбрасывает пакет при несовпадении — именно поэтому
-		// сообщения "уходили" без ошибок, но не доходили.
-		From:      s.cfg.LocalID,
-		Payload:   encryptedPayload,
-		Timestamp: time.Now().UnixMilli(),
+		// From — PeerID устройства (так требует ValidateMessage), а кто именно
+		// пишет и кому — логины, подписанные вместе с сообщением.
+		From:       s.cfg.LocalID,
+		FromUser:   sess.UserID,
+		TargetUser: rec.PeerUserID,
+		Payload:    payload,
+		Timestamp:  time.Now().UnixMilli(),
 	}
 	if err := msg.Sign(s.identity.PrivateKey); err != nil {
 		return UIMessage{}, err
 	}
 
-	strategy, err := s.routeMessage(msg)
+	strategy, err := s.routeMessage(sess, msg, peerOnline)
 	if err != nil {
 		return UIMessage{}, err
 	}
-	msg.Strategy = strategy
 
-	if err := history.SaveMessage(msg); err != nil {
-		return UIMessage{}, err
-	}
-	if err := history.TouchChat(history.ChatRecord{
+	history.SaveMessage(history.StoredMessage{
+		MessageID: msg.ID,
+		ChatID:    chatID,
+		TargetID:  targetPeer,
+		From:      sess.UserID,
+		Text:      text,
+		Timestamp: msg.Timestamp,
+		Outgoing:  true,
+		Strategy:  strategy.String(),
+	})
+	history.TouchChat(history.ChatRecord{
 		ChatID:        chatID,
-		PeerID:        targetPeerID,
-		Title:         s.lookupPeerTitle(targetPeerID),
 		LastMessage:   text,
 		LastTimestamp: msg.Timestamp,
-	}); err != nil {
-		return UIMessage{}, err
-	}
+	})
 
 	ui := UIMessage{
 		MessageID: msg.ID,
-		ChatID:    msg.ChatID,
-		TargetID:  msg.TargetID,
-		From:      msg.From,
+		ChatID:    chatID,
+		TargetID:  targetPeer,
+		From:      sess.UserID,
 		Text:      text,
 		Timestamp: msg.Timestamp,
 		Direction: "outgoing",
 		Strategy:  strategy.String(),
 	}
 	summary, _ := s.chatSummaryByID(chatID)
-	s.emit(Event{
-		Type:      "message_sent",
-		Timestamp: time.Now().UnixMilli(),
-		Message:   &ui,
-		Chat:      &summary,
-	})
+	s.emit(Event{Type: "message_sent", Timestamp: time.Now().UnixMilli(), Message: &ui, Chat: &summary})
 	return ui, nil
+}
+
+// routeMessage: если собеседник онлайн — напрямую/через relay с подтверждением
+// приёма; иначе (или если не вышло) — в почтовый ящик на сервере, откуда он
+// заберёт сообщение при входе.
+func (s *Service) routeMessage(sess *UserSession, msg protocol.Message, peerOnline bool) (protocol.Strategy, error) {
+	if peerOnline {
+		directCtx, cancel := context.WithTimeout(s.ctx, directSendTimeout)
+		strategy, err := s.node.SendDirect(directCtx, msg, false)
+		cancel()
+		if err == nil {
+			return strategy, nil
+		}
+		fmt.Printf("routeMessage: direct failed msg=%s: %v\n", msg.ID, err)
+
+		relayCtx, cancel := context.WithTimeout(s.ctx, relaySendTimeout)
+		strategy, err = s.node.SendDirect(relayCtx, msg, true)
+		cancel()
+		if err == nil {
+			return strategy, nil
+		}
+		fmt.Printf("routeMessage: relay failed msg=%s: %v\n", msg.ID, err)
+	}
+
+	raw, err := protocol.MarshalMessage(msg)
+	if err != nil {
+		return protocol.StrategyUnknown, err
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	defer cancel()
+	if err := s.node.MailboxPush(ctx, s.cfg.ServerAddr, sess.SessionID, msg.TargetUser, raw); err != nil {
+		return protocol.StrategyUnknown, fmt.Errorf("message could not be delivered: %w", err)
+	}
+	fmt.Printf("routeMessage: msg=%s queued on server for %s\n", msg.ID, msg.TargetUser)
+	return protocol.StrategyOffline, nil
+}
+
+// handlePacket вызывается для пакета, пришедшего напрямую по p2p. Возвращённая
+// ошибка уходит отправителю, и он доставит сообщение через сервер.
+func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) error {
+	now := time.Now()
+	senderID := sender.ID.String()
+	if blocked, err := corechat.IsBlocked(senderID); err == nil && blocked {
+		return errors.New("blocked")
+	}
+	if !s.allowRate(senderID, now, 20, 40) {
+		return errors.New("rate limited")
+	}
+	s.registerNeighbor(senderID, bestAddr(sender))
+
+	switch msg.Type {
+	case protocol.MsgJoin, protocol.MsgJoinAck:
+		if summary, err := s.chatSummaryByID(msg.ChatID); err == nil {
+			s.emit(Event{Type: "chat_updated", Timestamp: now.UnixMilli(), Chat: &summary})
+		}
+		return nil
+	case protocol.MsgChat:
+		if msg.TargetID != s.cfg.LocalID {
+			return errors.New("not addressed to this device")
+		}
+		sess, err := s.currentSession()
+		if err != nil {
+			return errors.New("recipient is not logged in")
+		}
+		return s.ingestChat(sess, msg, msg.Strategy.String())
+	}
+	return nil
+}
+
+// ingestChat — общий путь для сообщений из p2p и из mailbox.
+func (s *Service) ingestChat(sess *UserSession, msg protocol.Message, via string) error {
+	if msg.TargetUser != sess.UserID {
+		return permanent("message is addressed to %q, this session is %q", msg.TargetUser, sess.UserID)
+	}
+	if msg.FromUser == "" || msg.ChatID != privateChatID(msg.FromUser, msg.TargetUser) {
+		return permanent("inconsistent chat id")
+	}
+	if blocked, _ := corechat.IsBlocked(msg.From); blocked {
+		return nil
+	}
+	if history.HasMessage(msg.ID) {
+		return nil
+	}
+
+	key, err := s.chatKeyFor(sess, msg.FromUser, msg.ChatID)
+	if err != nil {
+		if strings.Contains(err.Error(), "user not found") {
+			return permanent("%v", err)
+		}
+		return err
+	}
+	plaintext, err := corecrypto.UnwrapKey(msg.Payload, key)
+	if err != nil {
+		return permanent("decrypt message: %w", err)
+	}
+	text := string(plaintext)
+
+	if !history.SaveMessage(history.StoredMessage{
+		MessageID: msg.ID,
+		ChatID:    msg.ChatID,
+		TargetID:  msg.TargetID,
+		From:      msg.FromUser,
+		Text:      text,
+		Timestamp: msg.Timestamp,
+		Outgoing:  false,
+		Strategy:  via,
+	}) {
+		return nil
+	}
+	history.TouchChat(history.ChatRecord{
+		ChatID:        msg.ChatID,
+		PeerID:        msg.From,
+		PeerUserID:    msg.FromUser,
+		Title:         s.displayName(msg.FromUser),
+		LastMessage:   text,
+		LastTimestamp: msg.Timestamp,
+	})
+
+	s.stateMu.Lock()
+	s.unread[msg.ChatID]++
+	s.stateMu.Unlock()
+
+	ui := UIMessage{
+		MessageID: msg.ID,
+		ChatID:    msg.ChatID,
+		TargetID:  msg.TargetID,
+		From:      msg.FromUser,
+		Text:      text,
+		Timestamp: msg.Timestamp,
+		Direction: "incoming",
+		Strategy:  via,
+	}
+	summary, _ := s.chatSummaryByID(msg.ChatID)
+	s.emit(Event{Type: "message_received", Timestamp: time.Now().UnixMilli(), Message: &ui, Chat: &summary})
+	return nil
 }
 
 func (s *Service) MarkChatRead(chatID string) error {
@@ -784,49 +1107,36 @@ func (s *Service) MarkChatRead(chatID string) error {
 	if err != nil {
 		return err
 	}
-	s.emit(Event{
-		Type:      "chat_read",
-		Timestamp: time.Now().UnixMilli(),
-		Chat:      &summary,
-	})
+	s.emit(Event{Type: "chat_read", Timestamp: time.Now().UnixMilli(), Chat: &summary})
 	return nil
 }
 
+// ======================= contacts / blocklist =======================
+
 func (s *Service) AddContact(contact corechat.Contact) (corechat.Contact, error) {
-	session, err := s.currentSession()
+	sess, err := s.currentSession()
 	if err != nil {
 		return corechat.Contact{}, err
 	}
 	if err := corechat.AddContact(contact); err != nil {
 		return corechat.Contact{}, err
 	}
-	created, err := corechat.FindContact(contact.PeerID)
+	created, err := corechat.FindContact(strings.TrimSpace(contact.PeerID))
 	if err != nil {
-		return corechat.Contact{}, err
-	}
-	if err := history.UpsertPeerAlias(created.PeerID, created.Name); err != nil {
 		return corechat.Contact{}, err
 	}
 	if s.node != nil {
 		_ = s.node.RememberHint(created.PeerID, created.Address())
 	}
-	targetUserID, err := s.resolveUserID(created.PeerID)
-	if err != nil {
-		return corechat.Contact{}, err
+	if userID := s.userForPeer(created.PeerID); userID != "" && userID != sess.UserID {
+		history.TouchChat(history.ChatRecord{
+			ChatID:     privateChatID(sess.UserID, userID),
+			PeerID:     created.PeerID,
+			PeerUserID: userID,
+			Title:      created.Name,
+		})
 	}
-	chatID := privateChatID(session.UserID, targetUserID)
-	if err := history.TouchChat(history.ChatRecord{
-		ChatID: chatID,
-		PeerID: created.PeerID,
-		Title:  created.Name,
-	}); err != nil {
-		return corechat.Contact{}, err
-	}
-	s.emit(Event{
-		Type:      "contact_added",
-		Timestamp: time.Now().UnixMilli(),
-		Contact:   &created,
-	})
+	s.emit(Event{Type: "contact_added", Timestamp: time.Now().UnixMilli(), Contact: &created})
 	return created, nil
 }
 
@@ -838,14 +1148,7 @@ func (s *Service) RenameContact(query, newName string) (corechat.Contact, error)
 	if err != nil {
 		return corechat.Contact{}, err
 	}
-	if err := history.UpsertPeerAlias(updated.PeerID, updated.Name); err != nil {
-		return corechat.Contact{}, err
-	}
-	s.emit(Event{
-		Type:      "contact_updated",
-		Timestamp: time.Now().UnixMilli(),
-		Contact:   &updated,
-	})
+	s.emit(Event{Type: "contact_updated", Timestamp: time.Now().UnixMilli(), Contact: &updated})
 	return updated, nil
 }
 
@@ -854,64 +1157,10 @@ func (s *Service) DeleteContact(query string) error {
 	if err != nil {
 		return err
 	}
-	peerID := contact.PeerID
-
-	if err := corechat.DeleteContact(peerID); err != nil {
+	if err := corechat.DeleteContact(contact.PeerID); err != nil {
 		return err
 	}
-	if err := history.DeletePeerAlias(peerID); err != nil {
-		return err
-	}
-	session, err := s.currentSession()
-	if err != nil {
-		return err
-	}
-	targetUserID, err := s.resolveUserID(peerID)
-	if err != nil {
-		return err
-	}
-
-	chatID := privateChatID(session.UserID, targetUserID)
-	chatExists := false
-
-	chats, err := s.listChats()
-	if err != nil {
-		return err
-	}
-	for _, item := range chats {
-		if item.ChatID == chatID {
-			chatExists = true
-			break
-		}
-	}
-
-	if chatExists {
-		if err := history.TouchChat(history.ChatRecord{
-			ChatID: chatID,
-			PeerID: peerID,
-			Title:  peerID,
-		}); err != nil {
-			return err
-		}
-	}
-
-	s.emit(Event{
-		Type:      "contact_deleted",
-		Timestamp: time.Now().UnixMilli(),
-	})
-
-	if chatExists {
-		summary, err := s.chatSummaryByID(chatID)
-		if err != nil {
-			return err
-		}
-		s.emit(Event{
-			Type:      "chat_updated",
-			Timestamp: time.Now().UnixMilli(),
-			Chat:      &summary,
-		})
-	}
-
+	s.emit(Event{Type: "contact_deleted", Timestamp: time.Now().UnixMilli()})
 	return nil
 }
 
@@ -925,11 +1174,7 @@ func (s *Service) BlockPeer(query, reason string) (corechat.BlockedPeer, error) 
 	}
 	for _, item := range items {
 		if item.PeerID == query || strings.EqualFold(item.Name, query) {
-			s.emit(Event{
-				Type:      "peer_blocked",
-				Timestamp: time.Now().UnixMilli(),
-				Blocked:   &item,
-			})
+			s.emit(Event{Type: "peer_blocked", Timestamp: time.Now().UnixMilli(), Blocked: &item})
 			return item, nil
 		}
 	}
@@ -940,10 +1185,7 @@ func (s *Service) UnblockPeer(query string) error {
 	if err := corechat.RemoveBlocked(query); err != nil {
 		return err
 	}
-	s.emit(Event{
-		Type:      "peer_unblocked",
-		Timestamp: time.Now().UnixMilli(),
-	})
+	s.emit(Event{Type: "peer_unblocked", Timestamp: time.Now().UnixMilli()})
 	return nil
 }
 
@@ -951,23 +1193,20 @@ func (s *Service) UpdateLocalPeerID(peerID string) error {
 	return fmt.Errorf("peer_id is derived from .identity and cannot be changed from UI")
 }
 
+// ======================= invites =======================
+
 func (s *Service) GetInviteCode() (InviteCode, error) {
 	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
 	rec, err := s.node.PublishInvite(code, defaultInviteTTL)
 	if err != nil {
 		return InviteCode{}, err
 	}
-	return InviteCode{
-		Code:      code,
-		PeerID:    rec.PeerID,
-		ExpiresAt: rec.ExpiresAt,
-	}, nil
+	return InviteCode{Code: code, PeerID: rec.PeerID, ExpiresAt: rec.ExpiresAt}, nil
 }
 
 func (s *Service) ResolveInviteCode(code string) (string, error) {
 	ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
 	defer cancel()
-
 	peerID, err := s.node.ResolveInvite(ctx, code)
 	if err != nil {
 		return "", fmt.Errorf("код не найден или сеть недоступна: %w", err)
@@ -975,294 +1214,144 @@ func (s *Service) ResolveInviteCode(code string) (string, error) {
 	return peerID, nil
 }
 
-func (s *Service) routeMessage(msg protocol.Message) (protocol.Strategy, error) {
-	type result struct {
-		strategy protocol.Strategy
-		err      error
-	}
-
-	hopCh := make(chan result, 1)
-	go func() {
-		hopCtx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-		defer cancel()
-		err := s.node.SendHop(hopCtx, msg, "")
-		hopCh <- result{strategy: protocol.StrategyHop, err: err}
-	}()
-
-	directCtx, cancel := context.WithTimeout(s.ctx, relayFallbackTimeout)
-	defer cancel()
-	if strategy, err := s.node.SendDirect(directCtx, msg, false); err == nil {
-		fmt.Printf("routeMessage: delivered msg=%s to=%s via direct\n", msg.ID, msg.TargetID)
-		return strategy, nil
-	} else {
-		fmt.Printf("routeMessage: direct send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
-	}
-
-	if strategy, err := s.node.SendDirect(s.ctx, msg, true); err == nil {
-		fmt.Printf("routeMessage: delivered msg=%s to=%s via relay\n", msg.ID, msg.TargetID)
-		return strategy, nil
-	} else {
-		fmt.Printf("routeMessage: relay send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
-	}
-
-	hopResult := <-hopCh
-	if hopResult.err == nil {
-		fmt.Printf("routeMessage: delivered msg=%s to=%s via hop\n", msg.ID, msg.TargetID)
-		return hopResult.strategy, nil
-	}
-	fmt.Printf("routeMessage: hop send failed msg=%s to=%s: %v\n", msg.ID, msg.TargetID, hopResult.err)
-
-	msg.Strategy = protocol.StrategyOffline
-	if err := history.QueueMessage(msg, time.Now().Add(10*time.Second).UnixMilli()); err != nil {
-		fmt.Printf("routeMessage: failed to queue offline msg=%s to=%s: %v\n", msg.ID, msg.TargetID, err)
-		return protocol.StrategyUnknown, err
-	}
-	fmt.Printf("routeMessage: msg=%s to=%s queued as OFFLINE (all delivery attempts failed)\n", msg.ID, msg.TargetID)
-	return protocol.StrategyOffline, nil
-}
-
-func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) {
-	now := time.Now()
-	if blocked, err := corechat.IsBlocked(sender.ID.String()); err != nil {
-		s.emitError(err)
-		return
-	} else if blocked {
-		return
-	}
-	if !s.allowRate(sender.ID.String(), now, 20, 40) {
-		return
-	}
-	s.registerNeighbor(sender.ID.String(), bestAddr(sender), sender.ID.String())
-
-	switch msg.Type {
-	case protocol.MsgJoin, protocol.MsgJoinAck:
-		if summary, err := s.chatSummaryByID(msg.ChatID); err == nil {
-			s.emit(Event{
-				Type:      "chat_updated",
-				Timestamp: now.UnixMilli(),
-				Chat:      &summary,
-			})
-		}
-	case protocol.MsgChat:
-		fmt.Printf("handlePacket: received chat msg=%s from=%s target=%s strategy=%s ttl=%d\n",
-			msg.ID, msg.From, msg.TargetID, msg.Strategy.String(), msg.TTL)
-
-		if s.isSeen(msg.ID, now, 10*time.Minute) {
-			fmt.Printf("handlePacket: msg=%s already seen, dropping duplicate\n", msg.ID)
-			return
-		}
-		if msg.TargetID != s.cfg.LocalID {
-			fmt.Printf("handlePacket: msg=%s not for us (target=%s, local=%s)\n", msg.ID, msg.TargetID, s.cfg.LocalID)
-			if msg.Strategy != protocol.StrategyHop || msg.TTL <= 1 {
-				return
-			}
-			msg.TTL--
-			_ = s.node.SendHop(s.ctx, msg, sender.ID.String())
-			return
-		}
-
-		// Реальный автор сообщения. ValidateMessage уже проверил, что From
-		// совпадает с PeerID из подписанного FromPubKey, поэтому ему можно
-		// доверять. sender.ID — это лишь сосед, который передал нам пакет
-		// (при hop-пересылке это не автор), и ключ чата нужно считать
-		// именно с автором.
-		origin := msg.From
-		if origin != sender.ID.String() {
-			if blocked, err := corechat.IsBlocked(origin); err != nil {
-				s.emitError(err)
-				return
-			} else if blocked {
-				return
-			}
-		}
-
-		session, err := s.currentSession()
-		if err != nil {
-			fmt.Printf("handlePacket: msg=%s dropped, not logged in\n", msg.ID)
-			return // не залогинены — не можем расшифровать, просто игнорируем сообщение
-		}
-
-		chatKey, err := s.deriveChatKeyWith(origin, msg.ChatID, session)
-		if err != nil {
-			fmt.Printf("handlePacket: msg=%s derive chat key FAILED: %v\n", msg.ID, err)
-			s.emitError(fmt.Errorf("derive chat key: %w", err))
-			return
-		}
-
-		plaintext, err := corecrypto.UnwrapKey(msg.Payload, chatKey)
-		if err != nil {
-			// Возможно, у нас в кэше ключ, посчитанный со СТАРЫМ identity-ключом
-			// собеседника (его аккаунт пересоздали). Сбрасываем кэши и
-			// пробуем ещё раз с актуальным ключом.
-			fmt.Printf("handlePacket: msg=%s decrypt failed (%v), retrying with fresh key\n", msg.ID, err)
-			_ = history.DeleteChatKey(msg.ChatID)
-			s.stateMu.Lock()
-			delete(s.identityKeys, origin)
-			s.stateMu.Unlock()
-			chatKey, err = s.deriveChatKeyWith(origin, msg.ChatID, session)
-			if err == nil {
-				plaintext, err = corecrypto.UnwrapKey(msg.Payload, chatKey)
-			}
-			if err != nil {
-				fmt.Printf("handlePacket: msg=%s decrypt FAILED: %v\n", msg.ID, err)
-				s.emitError(fmt.Errorf("decrypt message: %w", err))
-				return
-			}
-		}
-		fmt.Printf("handlePacket: msg=%s decrypted OK, saving to history\n", msg.ID)
-		if err := history.SaveMessage(msg); err != nil {
-			fmt.Printf("handlePacket: msg=%s SaveMessage FAILED: %v\n", msg.ID, err)
-			s.emitError(err)
-			return
-		}
-		if err := history.TouchChat(history.ChatRecord{
-			ChatID:        msg.ChatID,
-			PeerID:        origin,
-			Title:         s.lookupPeerTitle(origin),
-			LastMessage:   string(plaintext),
-			LastTimestamp: msg.Timestamp,
-		}); err != nil {
-			s.emitError(err)
-		}
-
-		s.stateMu.Lock()
-		s.unread[msg.ChatID]++
-		s.stateMu.Unlock()
-
-		ui := UIMessage{
-			MessageID: msg.ID,
-			ChatID:    msg.ChatID,
-			TargetID:  msg.TargetID,
-			From:      msg.From,
-			Text:      string(plaintext),
-			Timestamp: msg.Timestamp,
-			Direction: "incoming",
-			Strategy:  msg.Strategy.String(),
-		}
-		summary, _ := s.chatSummaryByID(msg.ChatID)
-		s.emit(Event{
-			Type:      "message_received",
-			Timestamp: now.UnixMilli(),
-			Message:   &ui,
-			Chat:      &summary,
-		})
-	}
-}
+// ======================= neighbors (LAN discovery) =======================
 
 func (s *Service) handlePeer(info peer.AddrInfo) {
 	if info.ID.String() == s.cfg.LocalID {
 		return
 	}
-	s.registerNeighbor(info.ID.String(), bestAddr(info), info.ID.String())
+	s.registerNeighbor(info.ID.String(), bestAddr(info))
 
-	go s.resolveWhoAmI(info.ID.String())
+	peerID := info.ID.String()
+	s.stateMu.Lock()
+	last := s.whoamiAt[peerID]
+	due := time.Since(last) > whoamiRefreshMinimum
+	if due {
+		s.whoamiAt[peerID] = time.Now()
+	}
+	s.stateMu.Unlock()
+	if due {
+		go s.resolveWhoAmI(peerID)
+	}
 }
+
 func (s *Service) resolveWhoAmI(peerID string) {
+	if s.node == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
-
 	resp, err := s.node.WhoAmI(ctx, peerID)
 	if err != nil {
 		return
 	}
-
-	displayName := strings.TrimSpace(fmt.Sprintf("%s %s", resp.FName, resp.SName))
+	displayName := strings.TrimSpace(resp.FName + " " + resp.SName)
 	if displayName == "" {
 		displayName = resp.UserID
 	}
-
-	// КЛЮЧЕВОЙ ФИКС: раньше резолвленное имя сохранялось только в
-	// оперативную карту s.neighbors, которую registerNeighbor полностью
-	// пересоздаёт на каждый пакет. lookupPeerTitle ищет имя через
-	// history.LookupPeerAlias (постоянное хранилище в SQLite), а туда имя
-	// никогда не попадало — поэтому уже после первого же отправленного
-	// сообщения имя откатывалось обратно на голый PeerID. Теперь пишем
-	// алиас в БД, и он переживёт любой последующий registerNeighbor.
-	if displayName != "" {
-		_ = history.UpsertPeerAlias(peerID, displayName)
-	}
-
 	s.stateMu.Lock()
-	if item, ok := s.neighbors[peerID]; ok {
+	item, ok := s.neighbors[peerID]
+	if ok {
 		item.UserID = resp.UserID
 		item.Name = displayName
 		s.neighbors[peerID] = item
 	}
 	s.stateMu.Unlock()
-
-	s.emit(Event{
-		Type:      "peer_discovered",
-		Timestamp: time.Now().UnixMilli(),
-		Peer:      &PeerPresence{PeerID: peerID, UserID: resp.UserID, Name: displayName},
-	})
+	if !ok {
+		return
+	}
+	s.emit(Event{Type: "peer_discovered", Timestamp: time.Now().UnixMilli(), Peer: &item})
 }
-func (s *Service) registerNeighbor(peerID, addr, name string) {
+
+func (s *Service) registerNeighbor(peerID, addr string) {
 	peerID = strings.TrimSpace(peerID)
 	addr = strings.TrimSpace(addr)
 	if peerID == "" || peerID == s.cfg.LocalID {
 		return
 	}
 	blocked, _ := corechat.IsBlocked(peerID)
-	displayName := s.lookupPeerTitle(peerID)
 
 	s.stateMu.Lock()
-	existing, hadExisting := s.neighbors[peerID]
+	existing, had := s.neighbors[peerID]
 	item := PeerPresence{
-		PeerID: peerID,
-		// Раньше UserID тут всегда обнулялся, потому что структура
-		// пересоздавалась с нуля при КАЖДОМ отправленном/полученном пакете.
-		// Это ломало кэш в resolveUserID и вынуждало заново резолвить
-		// логин перед каждой отправкой сообщения — лишние сетевые запросы,
-		// иногда конкурирующие с фоновым resolveWhoAmI и приводящие к
-		// таймаутам/сбоям доставки. Теперь переносим уже известный UserID.
+		PeerID:   peerID,
 		UserID:   existing.UserID,
-		Name:     displayName,
+		Name:     existing.Name,
 		Addr:     addr,
 		LastSeen: time.Now().UnixMilli(),
 		Blocked:  blocked,
 	}
-	if item.Addr == "" && hadExisting {
-		// Событие могло прийти без адреса (например, повторный
-		// handlePacket) — не затираем ранее известный адрес пустотой.
+	if item.Name == "" {
+		item.Name = peerID
+	}
+	if item.Addr == "" && had {
 		item.Addr = existing.Addr
 	}
 	s.neighbors[peerID] = item
 	s.stateMu.Unlock()
 
-	s.emit(Event{
-		Type:      "peer_discovered",
-		Timestamp: item.LastSeen,
-		Peer:      &item,
-	})
-}
-func (s *Service) lookupPeerName(peerID string) string {
-	if name, err := history.LookupPeerAlias(peerID); err == nil && name != "" {
-		return name
-	}
-	contacts, err := corechat.ListContacts()
-	if err != nil {
-		return ""
-	}
-	for _, item := range contacts {
-		if item.PeerID == peerID {
-			return item.Name
-		}
-	}
-	return ""
+	s.emit(Event{Type: "peer_discovered", Timestamp: item.LastSeen, Peer: &item})
 }
 
-func (s *Service) lookupPeerTitle(peerID string) string {
-	if name := s.lookupPeerName(peerID); name != "" {
-		return name
+// ======================= presence-based lookups =======================
+
+func (s *Service) userForPeer(peerID string) string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	var best OnlineUser
+	for _, u := range s.onlineUsers {
+		if u.PeerID == peerID && (best.UserID == "" || u.LastSeen > best.LastSeen) {
+			best = u
+		}
 	}
-	return peerID
+	return best.UserID
+}
+
+func (s *Service) resolveUserID(peerID string) (string, error) {
+	if userID := s.userForPeer(peerID); userID != "" {
+		return userID, nil
+	}
+	// Запасной путь для устройств вне presence: спросить напрямую. Результат
+	// намеренно НЕ кэшируется — на том же ПК может зайти другой аккаунт.
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+	resp, err := s.node.WhoAmI(ctx, peerID)
+	if err != nil {
+		return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, err)
+	}
+	return resp.UserID, nil
+}
+
+func (s *Service) peerIDForUser(userID string) string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.onlineUsers[userID].PeerID
+}
+
+func (s *Service) isUserOnline(userID string) bool {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	_, ok := s.onlineUsers[userID]
+	return ok
+}
+
+func (s *Service) displayName(userID string) string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.displayNameLocked(userID)
+}
+
+func (s *Service) displayNameLocked(userID string) string {
+	if u, ok := s.onlineUsers[userID]; ok {
+		if n := strings.TrimSpace(u.FName + " " + u.SName); n != "" {
+			return n
+		}
+	}
+	return s.peerNames[userID]
 }
 
 func (s *Service) listChats() ([]ChatSummary, error) {
-	records, err := history.ListChatRecords()
-	if err != nil {
-		return nil, err
-	}
+	records := history.ListChatRecords()
 	contacts, err := corechat.ListContacts()
 	if err != nil {
 		return nil, err
@@ -1271,7 +1360,6 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	contactMap := make(map[string]corechat.Contact, len(contacts))
 	for _, item := range contacts {
 		contactMap[item.PeerID] = item
@@ -1287,23 +1375,31 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 	chats := make([]ChatSummary, 0, len(records))
 	for _, record := range records {
 		addr := ""
-		if item, ok := contactMap[record.PeerID]; ok {
-			addr = item.Address()
-		} else if neighbor, ok := s.neighbors[record.PeerID]; ok {
-			addr = neighbor.Addr
+		title := ""
+		if c, ok := contactMap[record.PeerID]; ok {
+			addr = c.Address()
+			title = c.Name
+		} else if n, ok := s.neighbors[record.PeerID]; ok {
+			addr = n.Addr
 		}
-		title := strings.TrimSpace(record.Title)
-		if alias := s.lookupPeerName(record.PeerID); alias != "" {
-			title = alias
+		if title == "" {
+			title = s.displayNameLocked(record.PeerUserID)
+		}
+		if title == "" {
+			title = strings.TrimSpace(record.Title)
+		}
+		if title == "" {
+			title = record.PeerUserID
 		}
 		if title == "" {
 			title = record.PeerID
 		}
 		_, isBlocked := blockedSet[record.PeerID]
-		_, online := s.neighbors[record.PeerID]
+		_, online := s.onlineUsers[record.PeerUserID]
 		chats = append(chats, ChatSummary{
 			ChatID:        record.ChatID,
 			PeerID:        record.PeerID,
+			PeerUserID:    record.PeerUserID,
 			Title:         title,
 			Preview:       record.LastMessage,
 			LastTimestamp: record.LastTimestamp,
@@ -1322,81 +1418,6 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 	return chats, nil
 }
 
-func (s *Service) resolveUserID(peerID string) (string, error) {
-	s.stateMu.RLock()
-	if item, ok := s.neighbors[peerID]; ok && item.UserID != "" {
-		s.stateMu.RUnlock()
-		return item.UserID, nil
-	}
-	s.stateMu.RUnlock()
-
-	// Де-дупликация: если резолв для этого peer уже идёт (например, его
-	// параллельно запустил и фоновый resolveWhoAmI из handlePeer, и это же
-	// SendMessage), ждём результат первого запроса вместо того чтобы
-	// открывать второй параллельный WhoAmI-stream к тому же peer — именно
-	// такие гонки провоцируют таймауты мультиплексора вида
-	// "no recent network activity".
-	s.resolveMu.Lock()
-	if wait, inFlight := s.resolveInFlight[peerID]; inFlight {
-		s.resolveMu.Unlock()
-		select {
-		case <-wait:
-			s.stateMu.RLock()
-			item, ok := s.neighbors[peerID]
-			s.stateMu.RUnlock()
-			if ok && item.UserID != "" {
-				return item.UserID, nil
-			}
-			return "", fmt.Errorf("resolve user id for peer %s: concurrent resolve did not succeed", peerID)
-		case <-s.ctx.Done():
-			return "", s.ctx.Err()
-		}
-	}
-	done := make(chan struct{})
-	s.resolveInFlight[peerID] = done
-	s.resolveMu.Unlock()
-
-	defer func() {
-		s.resolveMu.Lock()
-		delete(s.resolveInFlight, peerID)
-		s.resolveMu.Unlock()
-		close(done)
-	}()
-
-	userID, err := s.doResolveUserID(peerID)
-	if err != nil {
-		return "", err
-	}
-	return userID, nil
-}
-
-// doResolveUserID выполняет фактический сетевой запрос, с одной повторной
-// попыткой при таймауте на более длинном интервале — единичный сетевой
-// затык (NAT hole-punch не успел, relay ещё не переключился и т.п.) не
-// должен целиком проваливать отправку сообщения.
-func (s *Service) doResolveUserID(peerID string) (string, error) {
-	var lastErr error
-	for attempt, timeout := range []time.Duration{10 * time.Second, 20 * time.Second} {
-		ctx, cancel := context.WithTimeout(s.ctx, timeout)
-		resp, err := s.node.WhoAmI(ctx, peerID)
-		cancel()
-		if err == nil {
-			s.stateMu.Lock()
-			if item, ok := s.neighbors[peerID]; ok {
-				item.UserID = resp.UserID
-				s.neighbors[peerID] = item
-			}
-			s.stateMu.Unlock()
-			return resp.UserID, nil
-		}
-		lastErr = err
-		if attempt == 0 {
-			fmt.Printf("resolve user id for peer %s: attempt %d failed, retrying with longer timeout: %v\n", peerID, attempt+1, err)
-		}
-	}
-	return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, lastErr)
-}
-
 func (s *Service) chatSummaryByID(chatID string) (ChatSummary, error) {
 	chats, err := s.listChats()
 	if err != nil {
@@ -1408,28 +1429,6 @@ func (s *Service) chatSummaryByID(chatID string) (ChatSummary, error) {
 		}
 	}
 	return ChatSummary{}, fmt.Errorf("chat not found: %s", chatID)
-}
-
-func (s *Service) emit(event Event) {
-	s.subMu.RLock()
-	defer s.subMu.RUnlock()
-	for ch := range s.subscribers {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
-}
-
-func (s *Service) emitError(err error) {
-	if err == nil {
-		return
-	}
-	s.emit(Event{
-		Type:      "error",
-		Timestamp: time.Now().UnixMilli(),
-		Error:     err.Error(),
-	})
 }
 
 func (s *Service) allowRate(key string, now time.Time, ratePerSec, burst float64) bool {
@@ -1456,110 +1455,6 @@ func (s *Service) allowRate(key string, now time.Time, ratePerSec, burst float64
 	return true
 }
 
-func (s *Service) isSeen(id string, now time.Time, ttl time.Duration) bool {
-	if id == "" {
-		return false
-	}
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if ts, ok := s.seen[id]; ok && now.Sub(ts) <= ttl {
-		return true
-	}
-	s.seen[id] = now
-	s.seenOrder = append(s.seenOrder, id)
-	for len(s.seenOrder) > dedupCapacity {
-		oldest := s.seenOrder[0]
-		s.seenOrder = s.seenOrder[1:]
-		delete(s.seen, oldest)
-	}
-	for key, ts := range s.seen {
-		if now.Sub(ts) > ttl {
-			delete(s.seen, key)
-		}
-	}
-	return false
-}
-
-func (s *Service) retryOutboxLoop() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			s.retryDueOutbox()
-		}
-	}
-}
-
-func (s *Service) retryDueOutbox() {
-	if _, err := s.currentSession(); err != nil {
-		// Пока никто не залогинен — outbox просто ждёт, это не ошибка,
-		// которую нужно показывать пользователю каждые 5 секунд.
-		return
-	}
-	items, err := history.LoadDueOutbox(time.Now().UnixMilli(), 16)
-	if err != nil {
-		s.emitError(err)
-		return
-	}
-	for _, item := range items {
-		msg := protocol.Message{
-			Version:  protocol.ProtocolVersion,
-			Type:     protocol.MsgChat,
-			Target:   protocol.TargetPeer,
-			TTL:      item.TTL,
-			TargetID: item.TargetID,
-			ChatID:   item.ChatID,
-			// Тот же принцип, что и в SendMessage: From = PeerID.
-			From:      s.cfg.LocalID,
-			Payload:   item.Payload,
-			Timestamp: item.CreatedAt,
-		}
-		msg.ID = item.MessageID
-
-		if err := msg.Sign(s.identity.PrivateKey); err != nil {
-			_ = history.UpdateOutboxFailure(
-				item.MessageID,
-				err.Error(),
-				time.Now().Add(30*time.Second).UnixMilli(),
-			)
-			continue
-		}
-		strategy, err := s.routeMessage(msg)
-		if err != nil {
-			_ = history.UpdateOutboxFailure(item.MessageID, err.Error(), time.Now().Add(30*time.Second).UnixMilli())
-			continue
-		}
-		if strategy == protocol.StrategyOffline {
-			// routeMessage снова поставил сообщение в очередь — не удаляем
-			// его из outbox и не помечаем как доставленное.
-			continue
-		}
-		msg.Strategy = strategy
-		_ = history.SaveMessage(msg)
-		_ = history.DeleteOutbox(item.MessageID)
-	}
-}
-
-func (s *Service) bootstrapContactHints() error {
-	contacts, err := corechat.ListContacts()
-	if err != nil {
-		return err
-	}
-	for _, item := range contacts {
-		if item.Name != "" {
-			_ = history.UpsertPeerAlias(item.PeerID, item.Name)
-		}
-		if s.node != nil {
-			_ = s.node.RememberHint(item.PeerID, item.Address())
-		}
-	}
-	return nil
-}
-
 func bestAddr(info peer.AddrInfo) string {
 	if len(info.Addrs) == 0 {
 		return ""
@@ -1571,11 +1466,10 @@ func bestAddr(info peer.AddrInfo) string {
 	}
 	return info.Addrs[0].String()
 }
+
 func privateChatID(a, b string) string {
 	if a <= b {
 		return "dm:" + a + ":" + b
 	}
 	return "dm:" + b + ":" + a
 }
-
-var _ = errors.Is

@@ -231,12 +231,13 @@ func (s *server) handleOpenChat(w http.ResponseWriter, r *http.Request) {
 		PeerID   string `json:"peer_id"`
 		PeerAddr string `json:"peer_addr"`
 		Name     string `json:"name"`
+		ChatID   string `json:"chat_id"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	summary, err := s.service.OpenPrivateChat(req.PeerID, req.PeerAddr, req.Name)
+	summary, err := s.service.OpenPrivateChat(req.PeerID, req.PeerAddr, req.Name, req.ChatID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -323,7 +324,7 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	message, err := s.service.SendMessage(req.TargetID, req.Text)
+	message, err := s.service.SendMessage(req.ChatID, req.TargetID, req.Text)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

@@ -36,7 +36,7 @@ const (
 	defaultReadLimit     int64 = 256 * 1024
 )
 
-type PacketHandler func(msg coreprotocol.Message, sender peer.AddrInfo)
+type PacketHandler func(msg coreprotocol.Message, sender peer.AddrInfo) error
 type PeerHandler func(info peer.AddrInfo)
 
 type Node struct {
@@ -391,6 +391,17 @@ func (n *Node) handleStream(stream network.Stream) {
 	defer stream.Close()
 	remotePeer := stream.Conn().RemotePeer()
 
+	// Отправитель ждёт ответ: "ok" — сообщение принято и сохранено,
+	// "err:<причина>" — не принято (тогда он отправит его через сервер).
+	reply := func(err error) {
+		text := "ok"
+		if err != nil {
+			text = "err:" + err.Error()
+		}
+		_ = stream.SetWriteDeadline(time.Now().Add(defaultWriteDeadline))
+		_, _ = stream.Write([]byte(text))
+	}
+
 	_ = stream.SetReadDeadline(time.Now().Add(defaultWriteDeadline))
 	data, err := io.ReadAll(io.LimitReader(stream, defaultReadLimit))
 	if err != nil {
@@ -400,13 +411,13 @@ func (n *Node) handleStream(stream network.Stream) {
 	msg, err := coreprotocol.UnmarshalMessage(data)
 	if err != nil {
 		fmt.Printf("handleStream: bad packet from %s (%d bytes): %v\n", remotePeer, len(data), err)
+		reply(err)
 		return
 	}
-	// Раньше здесь было молчаливое `return` — именно так пакеты с
-	// From != PeerID пропадали без единой строчки в логе.
 	if err := coreprotocol.ValidateMessage(msg); err != nil {
 		fmt.Printf("handleStream: INVALID packet dropped from=%s msg_id=%s msg_from=%s: %v\n",
 			remotePeer, msg.ID, msg.From, err)
+		reply(err)
 		return
 	}
 
@@ -415,9 +426,15 @@ func (n *Node) handleStream(stream network.Stream) {
 		Addrs: []ma.Multiaddr{stream.Conn().RemoteMultiaddr()},
 	}
 	n.rememberPeer(remote)
+
+	var herr error
 	if n.packetHandler != nil {
-		n.packetHandler(msg, remote)
+		herr = n.packetHandler(msg, remote)
 	}
+	if herr != nil {
+		fmt.Printf("handleStream: packet %s from %s not accepted: %v\n", msg.ID, remotePeer, herr)
+	}
+	reply(herr)
 }
 
 func (n *Node) send(ctx context.Context, info peer.AddrInfo, msg coreprotocol.Message) error {
@@ -443,7 +460,20 @@ func (n *Node) send(ctx context.Context, info peer.AddrInfo, msg coreprotocol.Me
 	}
 	// Явно сообщаем получателю "данных больше не будет": он читает
 	// io.ReadAll до EOF.
-	return stream.CloseWrite()
+	if err := stream.CloseWrite(); err != nil {
+		return err
+	}
+	// Ждём подтверждение: без него "успешная запись в stream" ничего
+	// не значит — получатель мог молча отбросить пакет.
+	_ = stream.SetReadDeadline(time.Now().Add(15 * time.Second))
+	ack, err := io.ReadAll(io.LimitReader(stream, 1024))
+	if err != nil {
+		return fmt.Errorf("read delivery ack: %w", err)
+	}
+	if string(ack) != "ok" {
+		return fmt.Errorf("receiver rejected message: %s", strings.TrimPrefix(string(ack), "err:"))
+	}
+	return nil
 }
 
 func (n *Node) rememberPeer(info peer.AddrInfo) {
