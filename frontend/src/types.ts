@@ -26,6 +26,7 @@ export type OnlineUser = {
   peer_id: string;
   fname: string;
   sname: string;
+  role: "teacher" | "student";
   online: boolean;
   last_seen: number;
 };

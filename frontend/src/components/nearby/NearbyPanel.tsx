@@ -1,22 +1,15 @@
 import { useMemo, useState } from "react";
 import "./nearby.css";
 
-export interface NearbyUser {
-  user_id: string;
-  peer_id: string;
-  fname: string;
-  sname: string;
-  online: boolean;
-  last_seen: number;
-}
+import type { OnlineUser } from "../../types";
 
 const EMOJI_PALETTE = [
   "🙂", "😎", "🐱", "🐶", "🦊", "🐼", "🐸", "🦁",
-  "🍕", "🍩", "🚀", "⚡", "🔥", "🌟", "🎮", "🎧",
+  "🍕", "🤓", "🚀", "⚡", "🔥", "🌟", "🎮", "❤️",
 ];
 
 interface NearbyPanelProps {
-  users: NearbyUser[];
+  users: OnlineUser[];
   query: string;
   onQueryChange: (value: string) => void;
   getPeerAvatar: (peerId: string, label: string) => string;
@@ -24,7 +17,7 @@ interface NearbyPanelProps {
   onOpenPeer: (peerId: string, peerAddr?: string, name?: string) => void;
 }
 
-function displayName(user: NearbyUser) {
+function displayName(user: OnlineUser) {
   const sname = user.sname.trim();
   const fname = user.fname.trim();
   const full = `${sname} ${fname}`.trim();
@@ -108,7 +101,9 @@ export default function NearbyPanel({
 
                 <span className="nearby-info">
                   <span className="nearby-name">{label}</span>
-                  <span className="nearby-id">#{user.user_id}</span>
+                  <span className="nearby-id">
+  {user.role === "teacher" ? "Teacher" : "Student"}
+</span>
                 </span>
               </button>
 
