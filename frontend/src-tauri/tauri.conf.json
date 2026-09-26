@@ -20,6 +20,9 @@
     ]
   },
   "app": {
+    "security": {
+      "capabilities": ["default"]
+    },
     "windows": [
       {
         "title": "Syne",

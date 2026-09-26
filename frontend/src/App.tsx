@@ -56,7 +56,7 @@ import {
 } from "./config/settings";
 
 import { TRANSLATIONS } from "./config/translations";
-
+import { ensureNotificationPermission, notifyNewMessage } from "./lib/notify";
 import {
   readStorage,
   writeStorage,
@@ -186,7 +186,7 @@ export default function App() {
 
   const [showSettings, setShowSettings] =
     useState(false);
-
+    
   const [activeSettingsSection, setActiveSettingsSection] =
     useState<SettingsSectionId | null>(null);
 
@@ -197,7 +197,9 @@ export default function App() {
         "system",
       ),
     );
-
+useEffect(() => {
+  void ensureNotificationPermission();
+}, []);
   const [notificationsEnabled, setNotificationsEnabled] =
     useState(() =>
       readStorage(
@@ -243,7 +245,16 @@ export default function App() {
         ? (stored as AppLanguage)
         : "ru";
     });
+    const notificationsEnabledRef = useRef(notificationsEnabled);
+const notificationPreviewRef = useRef(notificationPreview);
 
+useEffect(() => {
+  notificationsEnabledRef.current = notificationsEnabled;
+}, [notificationsEnabled]);
+
+useEffect(() => {
+  notificationPreviewRef.current = notificationPreview;
+}, [notificationPreview]);
   const [selectedAppIcon, setSelectedAppIcon] =
     useState<AppIconId>(() => {
       const stored =
@@ -488,34 +499,48 @@ useEffect(() => {
 
     const unsubscribe = listenEvents((event: AppEvent) => {
       switch (event.type) {
-        case "message_received":
-        case "message_sent": {
-          if (event.message) {
-            const msg = event.message;
-            setMessages((current) => {
-              const existing = current[msg.chat_id] ?? [];
-              if (
-                existing.some(
-                  (item) => item.message_id === msg.message_id,
-                )
-              ) {
-                return current;
-              }
-              return {
-                ...current,
-                [msg.chat_id]: [...existing, msg],
-              };
-            });
-          }
-          if (event.chat) {
-            const chat = event.chat;
-            setSnapshot((current) => ({
-              ...current,
-              chats: upsertChat(current.chats, chat),
-            }));
-          }
-          break;
-        }
+       case "message_received":
+case "message_sent": {
+  if (event.message) {
+    const msg = event.message;
+    setMessages((current) => {
+      const existing = current[msg.chat_id] ?? [];
+      if (
+        existing.some(
+          (item) => item.message_id === msg.message_id,
+        )
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        [msg.chat_id]: [...existing, msg],
+      };
+    });
+
+    if (event.type === "message_received") {
+      const chatTitle =
+        event.chat?.title ??
+        snapshot.chats.find((c) => c.chat_id === msg.chat_id)?.title ??
+        "Syne";
+
+      void notifyNewMessage({
+        title: chatTitle,
+        body: msg.text,
+        enabled: notificationsEnabledRef.current,
+        preview: notificationPreviewRef.current,
+      });
+    }
+  }
+  if (event.chat) {
+    const chat = event.chat;
+    setSnapshot((current) => ({
+      ...current,
+      chats: upsertChat(current.chats, chat),
+    }));
+  }
+  break;
+}
 
         case "chat_updated":
         case "chat_read": {

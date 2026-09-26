@@ -124,14 +124,6 @@ fn backend_workdir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-// Ищет server-addr.txt рядом с исполняемым файлом или в корне репозитория
-// (для `tauri dev`). Возвращает None, если файла нет — в этом случае
-// Go-бэкенд получает пустой ServerAddr и сам ищет study-сервер в локальной
-// сети через mDNS (см. Syne/core/transport/p2p/discovery_server.go).
-// Этот файл нужен только как ручной override для сетей, где mDNS не
-// достаёт (сервер за роутером, в другой подсети и т.п.) — формат: один
-// multiaddr в файле, например:
-// /ip4/192.168.31.64/tcp/9000/p2p/12D3KooW...
 fn resolve_server_addr(app: &AppHandle) -> Option<String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -208,27 +200,21 @@ fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(BackendState {
             child: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![backend_url, set_app_icon])
         .setup(|app| {
-            let state = app.state::<BackendState>();
-            let child = spawn_backend(app.handle())?;
-            *state.child.lock().expect("backend child lock") = Some(child);
+            let handle = app.handle().clone();
+            let child = spawn_backend(&handle)?;
+            app.state::<BackendState>()
+                .child
+                .lock()
+                .unwrap()
+                .replace(child);
+
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.app_handle().state::<BackendState>();
-                let child = {
-                    let mut guard = state.child.lock().expect("backend child lock");
-                    guard.take()
-                };
-                if let Some(child) = child {
-                    let _ = child.kill();
-                }
-            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
