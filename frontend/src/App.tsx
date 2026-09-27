@@ -1113,6 +1113,24 @@ useEffect(() => {
   })();
   return () => { cancelled = true; };
 }, [authenticated, selectedChatId]);
+const previousChatIdRef = useRef<string>("");
+
+  useEffect(() => {
+    const container = messageStreamRef.current;
+    if (!container) return;
+
+    const isChatSwitch = previousChatIdRef.current !== selectedChatId;
+    previousChatIdRef.current = selectedChatId;
+
+    const behavior: ScrollBehavior =
+      pendingScrollBehaviorRef.current ?? (isChatSwitch ? "auto" : "smooth");
+    pendingScrollBehaviorRef.current = null;
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+  }, [selectedMessages, selectedChatId]);
   if (!authenticated) {
   return (
     <AuthGate

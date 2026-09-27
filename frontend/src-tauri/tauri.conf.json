@@ -31,7 +31,7 @@
         "minWidth": 1080,
         "minHeight": 720,
         "resizable": true,
-        "devtools": false
+        "devtools": true
       }
     ]
   }

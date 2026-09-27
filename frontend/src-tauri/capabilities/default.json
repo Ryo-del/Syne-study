@@ -4,6 +4,7 @@
   "windows": ["main"],
   "permissions": [
     "notification:default",
-    "core:tray:default"
+    "core:tray:default",
+    "core:window:allow-is-focused"
   ]
 }
