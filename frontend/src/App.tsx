@@ -337,6 +337,11 @@ useEffect(() => {
   useEffect(() => {
     hiddenChatIdsRef.current = hiddenChatIds;
   }, [hiddenChatIds]);
+   const selectedChatIdRef = useRef(selectedChatId);
+
+  useEffect(() => {
+    selectedChatIdRef.current = selectedChatId;
+  }, [selectedChatId]);
   const deferredQuery =
     useDeferredValue(query);
   const visibleChats = useMemo(
@@ -408,6 +413,13 @@ useEffect(() => {
   try {
     const nextSnapshot = await loadBootstrap();
 
+    // Открытый чат всегда считается прочитанным
+    const nextChats = (nextSnapshot.chats ?? []).map((chat) =>
+      chat.chat_id === selectedChatIdRef.current
+        ? { ...chat, unread_count: 0 }
+        : chat,
+    );
+
     startTransition(() => {
       setSnapshot({
         ...nextSnapshot,
@@ -415,12 +427,12 @@ useEffect(() => {
         neighbors: nextSnapshot.neighbors ?? [],
         contacts: nextSnapshot.contacts ?? [],
         blocked: nextSnapshot.blocked ?? [],
-        chats: nextSnapshot.chats ?? [],
+        chats: nextChats,
       });
 
-      if (selectFirst && !selectedChatId) {
-        const firstChat = nextSnapshot.chats?.find(
-          (chat) => !hiddenChatIds.includes(chat.chat_id),
+      if (selectFirst && !selectedChatIdRef.current) {
+        const firstChat = nextChats.find(
+          (chat) => !hiddenChatIdsRef.current.includes(chat.chat_id),
         );
 
         if (firstChat) {
@@ -503,50 +515,58 @@ useEffect(() => {
 
     const unsubscribe = listenEvents((event: AppEvent) => {
       switch (event.type) {
-       case "message_received":
-case "message_sent": {
-  if (event.message) {
-    const msg = event.message;
-    setMessages((current) => {
-      const existing = current[msg.chat_id] ?? [];
-      if (
-        existing.some(
-          (item) => item.message_id === msg.message_id,
-        )
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        [msg.chat_id]: [...existing, msg],
-      };
-    });
+              case "message_received":
+        case "message_sent": {
+          if (event.message) {
+            const msg = event.message;
+            setMessages((current) => {
+              const existing = current[msg.chat_id] ?? [];
+              if (
+                existing.some(
+                  (item) => item.message_id === msg.message_id,
+                )
+              ) {
+                return current;
+              }
+              return {
+                ...current,
+                [msg.chat_id]: [...existing, msg],
+              };
+            });
 
-        if (event.type === "message_received") {
-      unhideChat(msg.chat_id);
+            if (event.type === "message_received") {
+              unhideChat(msg.chat_id);
 
-      const chatTitle =
-        event.chat?.title ??
-        snapshot.chats.find((c) => c.chat_id === msg.chat_id)?.title ??
-        "Syne";
+              // Чат открыт прямо сейчас: сообщение считается прочитанным
+              if (msg.chat_id === selectedChatIdRef.current) {
+                void markChatRead(msg.chat_id).catch(() => {});
+              }
 
-      void notifyNewMessage({
-        title: chatTitle,
-        body: msg.text,
-        enabled: notificationsEnabledRef.current,
-        preview: notificationPreviewRef.current,
-      });
-    }
-  }
-  if (event.chat) {
-    const chat = event.chat;
-    setSnapshot((current) => ({
-      ...current,
-      chats: upsertChat(current.chats, chat),
-    }));
-  }
-  break;
-}
+              // notifyNewMessage сам молчит, если окно в фокусе
+              void notifyNewMessage({
+                title: event.chat?.title || "Syne",
+                body: msg.text,
+                enabled: notificationsEnabledRef.current,
+                preview: notificationPreviewRef.current,
+              });
+            }
+          }
+          if (event.chat) {
+            // Бэкенд уже посчитал +1 непрочитанное, а для открытого чата гасим сразу,
+            // не дожидаясь ответа markChatRead
+            const isOpenChat =
+              event.type === "message_received" &&
+              event.chat.chat_id === selectedChatIdRef.current;
+            const chat = isOpenChat
+              ? { ...event.chat, unread_count: 0 }
+              : event.chat;
+            setSnapshot((current) => ({
+              ...current,
+              chats: upsertChat(current.chats, chat),
+            }));
+          }
+          break;
+        }
 
         case "chat_updated":
         case "chat_read": {
