@@ -128,7 +128,11 @@ export function markChatRead(chatId: string) {
     body: JSON.stringify({ chat_id: chatId }),
   });
 }
-
+export function deleteChat(chatId: string) {
+  return request<{ ok: true }>(`/api/chats/${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+  });
+}
 export function clearChatHistory() {
   return request<{ ok: true }>("/api/chats/history", {
     method: "DELETE",
@@ -202,7 +206,8 @@ export function listenEvents(onEvent: (event: AppEvent) => void) {
   };
 
   source.onerror = () => undefined;
-
+  source.addEventListener("chat_history_deleted", forward as EventListener);
+  source.addEventListener("chat_deleted", forward as EventListener);
   source.addEventListener("peer_discovered", forward as EventListener);
   source.addEventListener("online_snapshot", forward as EventListener);
   source.addEventListener("online_user_updated", forward as EventListener);

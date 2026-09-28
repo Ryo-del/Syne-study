@@ -23,6 +23,7 @@ import {
   resolveInviteCode,
   saveContact,
   sendMessage,
+  deleteChat,
   unblockPeer,
   logout,
 } from "./lib/api";
@@ -913,7 +914,7 @@ useEffect(() => {
       setSaving(false);
     }
   }
-
+  
   async function handleBlock() {
     if (!selectedChat) return;
     try {
@@ -1110,14 +1111,29 @@ useEffect(() => {
     setHiddenChatIds(next);
     writeStorage("syne.hidden_chat_ids", next);
   }
-  function handleHideChat(chatId: string) {
-    if (hiddenChatIds.includes(chatId)) {
-      return;
-    }
-    persistHiddenChats([...hiddenChatIds, chatId]);
+    async function handleDeleteChat(chatId: string) {
     setChatContextMenu(null);
+    try {
+      setError("");
+      await deleteChat(chatId);
+      startTransition(() => {
+        setMessages((current) => {
+          const { [chatId]: _removed, ...rest } = current;
+          return rest;
+        });
+        setSnapshot((current) => ({
+          ...current,
+          chats: current.chats.filter((c) => c.chat_id !== chatId),
+        }));
+        if (selectedChatIdRef.current === chatId) {
+          setSelectedChatId("");
+        }
+      });
+    } catch (err) {
+      setError(describeError(err, "Failed to delete chat"));
+    }
   }
-
+  
   function handleChatContextMenu(event: React.MouseEvent, chatId: string) {
     event.preventDefault();
     event.stopPropagation();
@@ -1484,7 +1500,7 @@ const previousChatIdRef = useRef<string>("");
           contactContextMenu
         }
         onHideChat={
-          handleHideChat
+          handleDeleteChat
         }
         onDeleteContact={(peerId) => {
           void handleDeleteContact(

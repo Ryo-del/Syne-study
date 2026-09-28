@@ -171,7 +171,27 @@ func Export() ([]byte, error) {
 	}
 	return json.Marshal(e)
 }
+func DeleteChat(chatID string) bool {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return false
+	}
+	mu.Lock()
+	defer mu.Unlock()
 
+	_, hadChat := chats[chatID]
+	list, hadMessages := messages[chatID]
+	if !hadChat && !hadMessages {
+		return false
+	}
+	for _, m := range list {
+		delete(ids, m.MessageID)
+	}
+	delete(messages, chatID)
+	delete(chats, chatID)
+	version++
+	return true
+}
 func Import(data []byte) error {
 	var e exported
 	if err := json.Unmarshal(data, &e); err != nil {

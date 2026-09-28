@@ -1180,7 +1180,29 @@ func (s *Service) BlockPeer(query, reason string) (corechat.BlockedPeer, error) 
 	}
 	return corechat.BlockedPeer{}, fmt.Errorf("blocked peer not found after update")
 }
+func (s *Service) DeleteChat(chatID string) error {
+	sess, err := s.currentSession()
+	if err != nil {
+		return err
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return fmt.Errorf("chat_id is required")
+	}
+	if !history.DeleteChat(chatID) {
+		return fmt.Errorf("chat not found: %s", chatID)
+	}
+	s.stateMu.Lock()
+	delete(s.unread, chatID)
+	s.stateMu.Unlock()
 
+	if err := s.flushVault(sess, false); err != nil {
+		fmt.Printf("delete chat: vault upload will be retried by autosave: %v\n", err)
+	}
+
+	s.emit(Event{Type: "chat_deleted", Timestamp: time.Now().UnixMilli()})
+	return nil
+}
 func (s *Service) UnblockPeer(query string) error {
 	if err := corechat.RemoveBlocked(query); err != nil {
 		return err

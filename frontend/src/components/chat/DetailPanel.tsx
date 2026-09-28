@@ -147,10 +147,6 @@ export default function DetailPanel({
 
           <p className="peer-id-subtextline">
             @
-            {selectedChat.peer_id.slice(
-              0,
-              8,
-            )}
             ...
           </p>
         </div>
@@ -159,24 +155,7 @@ export default function DetailPanel({
       <div className="detail-content">
         <div className="detail-divider" />
 
-        <div className="info-section">
-          <span className="section-label">
-            PEER ID
-          </span>
-
-          <div
-            className="id-copy-box"
-            onClick={() =>
-              navigator.clipboard.writeText(
-                selectedChat.peer_id,
-              )
-            }
-          >
-            <code>
-              {selectedChat.peer_id}
-            </code>
-          </div>
-        </div>
+        
 
         {selectedAddr && (
           <div className="info-section">

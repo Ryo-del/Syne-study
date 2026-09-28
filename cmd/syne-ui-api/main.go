@@ -277,37 +277,52 @@ func (s *server) handleClearChatHistory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleChatRoutes(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/chats/")
-	path = strings.Trim(path, "/")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/chats/"), "/")
 	if path == "" {
 		writeError(w, http.StatusNotFound, "chat route not found")
 		return
 	}
-	if !strings.HasSuffix(path, "/messages") {
-		writeError(w, http.StatusNotFound, "chat route not found")
+
+	// GET /api/chats/{chatID}/messages
+	if strings.HasSuffix(path, "/messages") {
+		chatID := strings.Trim(strings.TrimSuffix(path, "/messages"), "/")
+		if chatID == "" {
+			writeError(w, http.StatusBadRequest, "chat_id is required")
+			return
+		}
+		chatID, err := url.PathUnescape(chatID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		items, err := s.service.ListMessages(chatID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
 		return
 	}
-	chatID := strings.TrimSuffix(path, "/messages")
-	chatID = strings.Trim(chatID, "/")
-	if chatID == "" {
-		writeError(w, http.StatusBadRequest, "chat_id is required")
-		return
-	}
-	chatID, err := url.PathUnescape(chatID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if r.Method != http.MethodGet {
+
+	// DELETE /api/chats/{chatID}
+	if r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	items, err := s.service.ListMessages(chatID)
+	chatID, err := url.PathUnescape(path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	if err := s.service.DeleteChat(chatID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
