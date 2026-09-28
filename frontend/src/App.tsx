@@ -102,7 +102,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   online_users: [],
   chats: [],
 };
-
+const LIVE_REFRESH_INTERVAL_MS = 2000;
 export default function App() {
   const [snapshot, setSnapshot] =
     useState<Snapshot>(EMPTY_SNAPSHOT);
@@ -332,7 +332,11 @@ useEffect(() => {
 
   const deleteHoldStartedAtRef =
     useRef(0);
+    const hiddenChatIdsRef = useRef(hiddenChatIds);
 
+  useEffect(() => {
+    hiddenChatIdsRef.current = hiddenChatIds;
+  }, [hiddenChatIds]);
   const deferredQuery =
     useDeferredValue(query);
   const visibleChats = useMemo(
@@ -518,7 +522,9 @@ case "message_sent": {
       };
     });
 
-    if (event.type === "message_received") {
+        if (event.type === "message_received") {
+      unhideChat(msg.chat_id);
+
       const chatTitle =
         event.chat?.title ??
         snapshot.chats.find((c) => c.chat_id === msg.chat_id)?.title ??
@@ -601,7 +607,15 @@ case "message_sent": {
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated]);
+  useEffect(() => {
+    if (!authenticated) return;
 
+    const intervalId = window.setInterval(() => {
+      void refreshBootstrap();
+    }, LIVE_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [authenticated]);
   const filteredChats = useMemo(() => {
     const needle =
       deferredQuery
@@ -775,6 +789,7 @@ case "message_sent": {
       setError("");
       const resolvedName = (name && name !== peerId) ? name : `Anonymous ${peerId.slice(-4)}`;
       const chat = await openPrivateChat({ peer_id: peerId, peer_addr: peerAddr, name: resolvedName });
+      unhideChat(chat.chat_id);
       startTransition(() => {
         setSnapshot((current) => ({
           ...current,
@@ -1067,7 +1082,14 @@ useEffect(() => {
     setHiddenChatIds(nextIds);
     writeStorage("syne.hidden_chat_ids", nextIds);
   }
-
+    function unhideChat(chatId: string) {
+    const current = hiddenChatIdsRef.current;
+    if (!current.includes(chatId)) return;
+    const next = current.filter((id) => id !== chatId);
+    hiddenChatIdsRef.current = next;
+    setHiddenChatIds(next);
+    writeStorage("syne.hidden_chat_ids", next);
+  }
   function handleHideChat(chatId: string) {
     if (hiddenChatIds.includes(chatId)) {
       return;
