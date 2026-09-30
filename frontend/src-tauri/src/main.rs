@@ -129,17 +129,17 @@ fn resolve_server_addr(app: &AppHandle) -> Option<String> {
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("server-addr.txt"));
+            candidates.push(exe_dir.join("client-config.txt"));
         }
     }
 
     if cfg!(debug_assertions) {
-        candidates.push(repo_root().join("server-addr.txt"));
-        candidates.push(repo_root().join("frontend/src-tauri/server-addr.txt"));
+        candidates.push(repo_root().join("client-config.txt"));
+        candidates.push(repo_root().join("frontend/src-tauri/client-config.txt"));
     }
 
     if let Ok(app_config_dir) = app.path().app_config_dir() {
-        candidates.push(app_config_dir.join("server-addr.txt"));
+        candidates.push(app_config_dir.join("client-config.txt"));
     }
 
     for candidate in candidates {
@@ -152,7 +152,7 @@ fn resolve_server_addr(app: &AppHandle) -> Option<String> {
         }
     }
 
-    eprintln!("no server-addr.txt override found — letting the backend auto-discover the study server");
+    eprintln!("no client-config.txt override found — letting the backend auto-discover the study server");
     None
 }
 
