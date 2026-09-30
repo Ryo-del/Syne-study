@@ -212,7 +212,10 @@ button {
   letter-spacing: -0.02em;
   color: var(--ink);
 }
-
+.icon-rail-btn.danger:hover {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
 .live-badge {
   padding: 2px 10px;
   border-radius: 999px;

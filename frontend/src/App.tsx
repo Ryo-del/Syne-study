@@ -1220,6 +1220,9 @@ const previousChatIdRef = useRef<string>("");
             setSidebarView
           }
           onSettings={handleSettings}
+          onLogout={() => {
+            void handleLogout();
+          }}
         />
 
                 {sidebarView === "network" ? (

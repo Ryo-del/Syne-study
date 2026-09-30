@@ -26,6 +26,8 @@ interface IconRailProps {
   ) => void;
 
   onSettings: () => void;
+  onLogout: () => void;
+
 }
 
 export default function IconRail({
@@ -37,6 +39,7 @@ export default function IconRail({
   onSelfEmojiChange,
   onSidebarViewChange,
   onSettings,
+  onLogout,
 }: IconRailProps) {
   return (
     <nav className="icon-rail">
@@ -186,7 +189,29 @@ export default function IconRail({
       </button>
 
       <div className="icon-rail-spacer" />
-
+        <button
+        type="button"
+        className="icon-rail-btn danger"
+        title="Log out"
+        aria-label="Log out"
+        onClick={onLogout}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m16 17 5-5-5-5" />
+          <path d="M21 12H9" />
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+        </svg>
+      </button>
       <button
         type="button"
         className={`icon-rail-btn ${
