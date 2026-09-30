@@ -19,6 +19,20 @@ export function buildEmptyContact(
   };
 }
 
+export function buildQuickContact(
+  chat: ChatSummary,
+  fallbackAddr?: string,
+): Contact {
+  const draft = buildContactDraft(chat, fallbackAddr);
+  const hasAddr = draft.ip !== EMPTY_CONTACT.ip && draft.port !== "";
+  return {
+    ...draft,
+    name: draft.name || `Anonymous ${(chat.peer_id || chat.peer_user_id || "").slice(-4)}`,
+    user_id: chat.peer_user_id || undefined,
+    ip: hasAddr ? draft.ip : "",
+    port: hasAddr ? draft.port : "",
+  };
+}
 export function buildContactDraft(
   chat: ChatSummary | null,
   fallbackAddr?: string,

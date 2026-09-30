@@ -1,211 +1,123 @@
-import type {
-  Contact,
-  InviteCode,
-} from "../../types";
+import { useEffect, useState } from "react";
+import { searchDirectory } from "../../lib/api";
+import { describeError } from "../../lib/format";
+import type { Contact, DirectoryUser } from "../../types";
 
 interface ContactPopoverProps {
-  contactForm: Contact;
-  inviteCode: InviteCode | null;
-  invitePeerIdDraft: string;
+  contacts: Contact[];
   saving: boolean;
-  selectedChat: unknown;
-
+  getPeerAvatar: (peerId: string, label: string) => string;
+  onAdd: (user: DirectoryUser) => void;
   onClose: () => void;
-
-  onInvitePeerIdChange: (
-    value: string,
-  ) => void;
-
-  onContactFormChange: (
-    value: Contact,
-  ) => void;
-
-  onOpenInvitePeer: () => void;
-
-  onPrefillCurrentPeer: () => void;
-
-  onSaveContact: () => void;
 }
 
+const SEARCH_DEBOUNCE_MS = 250;
+
+function fullName(u: DirectoryUser) {
+  return `${u.fname} ${u.sname}`.trim() || u.login;
+}
+
+
 export default function ContactPopover({
-  contactForm,
-  inviteCode,
-  invitePeerIdDraft,
+  contacts,
   saving,
-  selectedChat,
+  getPeerAvatar,
+  onAdd,
   onClose,
-  onInvitePeerIdChange,
-  onContactFormChange,
-  onOpenInvitePeer,
-  onPrefillCurrentPeer,
-  onSaveContact,
 }: ContactPopoverProps) {
+  const [query, setQuery] = useState("");
+  const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(
+      async () => {
+        setLoading(true);
+        setError("");
+        try {
+          const items = await searchDirectory(query, controller.signal);
+          if (!controller.signal.aborted) setUsers(items);
+        } catch (err) {
+          if (!controller.signal.aborted) {
+            setError(describeError(err, "Failed to load users"));
+          }
+        } finally {
+          if (!controller.signal.aborted) setLoading(false);
+        }
+      },
+      query ? SEARCH_DEBOUNCE_MS : 0,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+
+  const isAdded = (u: DirectoryUser) =>
+  contacts.some((c) =>
+    c.user_id ? c.user_id === u.login : !!u.peer_id && c.peer_id === u.peer_id,
+  );
+
   return (
     <>
-      <div
-        className="contact-popover-backdrop"
-        onClick={onClose}
-      />
+      <div className="contact-popover-backdrop" onClick={onClose} />
 
       <div className="contact-popover">
         <div className="popover-head">
-          <h2>Add friend</h2>
-
-          <button
-            type="button"
-            className="ghost-tiny"
-            onClick={onClose}
-          >
+          <h2>New contact</h2>
+          <button type="button" className="ghost-tiny" onClick={onClose}>
             Close
           </button>
         </div>
 
-        <div className="popover-form">
-          <label>
-            <span>
-              Your 6-digit code
-            </span>
+        <input
+          className="directory-search"
+          value={query}
+          placeholder="Search by name..."
+          autoFocus
+          onChange={(e) => setQuery(e.target.value)}
+        />
 
-            <input
-              value={
-                inviteCode?.code ??
-                "Loading..."
-              }
-              readOnly
-            />
-          </label>
+        <div className="directory-list">
+          {error ? <div className="directory-empty">{error}</div> : null}
 
-          <label>
-            <span>
-              Friend code
-            </span>
+          {!error && !loading && users.length === 0 ? (
+            <div className="directory-empty">No users found</div>
+          ) : null}
 
-            <input
-              value={
-                invitePeerIdDraft
-              }
-              placeholder="123456"
-              onChange={(e) =>
-                onInvitePeerIdChange(
-                  e.target.value
-                    .replace(/\D/g, "")
-                    .slice(0, 6),
-                )
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  onOpenInvitePeer();
-                }
-              }}
-            />
-          </label>
-        </div>
+          {!error &&
+            users.map((u) => {
+              const name = fullName(u);
+              return (
+                <div className="directory-row" key={u.login}>
+                  <div className="directory-avatar">
+                    {getPeerAvatar(u.peer_id || u.login, name)}
+                    {u.online ? <span className="directory-online" /> : null}
+                  </div>
 
-        <div className="popover-form">
-          <label>
-            <span>
-              Display Name
-            </span>
+                  <div className="directory-name">{name}</div>
 
-            <input
-              value={
-                contactForm.name
-              }
-              onChange={(e) =>
-                onContactFormChange({
-                  ...contactForm,
-                  name: e.target.value,
-                })
-              }
-            />
-          </label>
-
-          <label>
-            <span>IP</span>
-
-            <input
-              value={
-                contactForm.ip
-              }
-              onChange={(e) =>
-                onContactFormChange({
-                  ...contactForm,
-                  ip: e.target.value,
-                })
-              }
-            />
-          </label>
-
-          <label>
-            <span>
-              Peer ID
-            </span>
-
-            <input
-              value={
-                contactForm.peer_id
-              }
-              onChange={(e) =>
-                onContactFormChange({
-                  ...contactForm,
-                  peer_id:
-                    e.target.value,
-                })
-              }
-            />
-          </label>
-
-          <label>
-            <span>
-              Port
-            </span>
-
-            <input
-              value={
-                contactForm.port
-              }
-              onChange={(e) =>
-                onContactFormChange({
-                  ...contactForm,
-                  port: e.target.value,
-                })
-              }
-            />
-          </label>
-        </div>
-
-        <div className="action-row">
-          <button
-            className="ghost"
-            disabled={
-              !invitePeerIdDraft ||
-              saving
-            }
-            onClick={
-              onOpenInvitePeer
-            }
-          >
-            Open by code
-          </button>
-
-          <button
-            className="ghost"
-            disabled={!selectedChat}
-            onClick={
-              onPrefillCurrentPeer
-            }
-          >
-            Use current peer
-          </button>
-
-          <button
-            className="primary"
-            disabled={saving}
-            onClick={onSaveContact}
-          >
-            Save contact
-          </button>
+                  {isAdded(u) ? (
+                    <span className="directory-added" title="Already in ">
+                      ✓
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="directory-add"
+                      title="Add contact"
+                      aria-label={`Add ${name}`}
+                      disabled={saving}
+                      onClick={() => onAdd(u)}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              );
+            })}
         </div>
       </div>
     </>

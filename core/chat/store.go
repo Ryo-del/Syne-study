@@ -1,9 +1,6 @@
 // Package chat хранит контакты и чёрный список ТОЛЬКО В ПАМЯТИ. На диск
 // ничего не пишется; данные едут на сервер вместе с остальным vault'ом
 // (см. Export/Import) и стираются при выходе (Reset).
-//
-// Замените этим файлом chat.go и blocklist.go; chat_test.go (тесты на файлы)
-// нужно удалить или переписать.
 package chat
 
 import (
@@ -15,15 +12,23 @@ import (
 	"time"
 )
 
+// Contact — запись адресной книги. Ключ: UserID (логин на сервере), а если
+// его нет, PeerID. IP/Port необязательны: у пользователя из каталога сервера
+// адреса может не быть.
 type Contact struct {
 	Name   string `json:"name"`
 	PeerID string `json:"peer_id"`
 	IP     string `json:"ip"`
 	Port   string `json:"port"`
+	UserID string `json:"user_id,omitempty"`
 }
 
+// Address возвращает "ip:port" или "", если адрес неизвестен.
 func (c Contact) Address() string {
 	ip := strings.Trim(c.IP, "[]")
+	if ip == "" || c.Port == "" {
+		return ""
+	}
 	return net.JoinHostPort(ip, c.Port)
 }
 
@@ -57,13 +62,46 @@ func Reset() {
 
 // ---------- contacts ----------
 
+// sameIdentity: один и тот же человек. Если у обоих известен UserID, решает
+// он (за тем же ПК мог зайти другой аккаунт, поэтому совпадения PeerID мало);
+// иначе сравниваем PeerID.
+func sameIdentity(a, b Contact) bool {
+	if a.UserID != "" && b.UserID != "" {
+		return a.UserID == b.UserID
+	}
+	return a.PeerID != "" && a.PeerID == b.PeerID
+}
+
+// findContactLocked: сначала точное совпадение по UserID/PeerID, потом по имени.
 func findContactLocked(query string) int {
 	for i := range contacts {
-		if contacts[i].PeerID == query || strings.EqualFold(contacts[i].Name, query) {
+		if (contacts[i].UserID != "" && contacts[i].UserID == query) ||
+			(contacts[i].PeerID != "" && contacts[i].PeerID == query) {
+			return i
+		}
+	}
+	for i := range contacts {
+		if strings.EqualFold(contacts[i].Name, query) {
 			return i
 		}
 	}
 	return -1
+}
+
+func nameTakenLocked(name string, skip int) bool {
+	for i := range contacts {
+		if i != skip && strings.EqualFold(contacts[i].Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
 }
 
 func ListContacts() ([]Contact, error) {
@@ -87,30 +125,76 @@ func FindContact(query string) (Contact, error) {
 	return Contact{}, fmt.Errorf("contact not found: %s", query)
 }
 
+// AddContact оставлен для совместимости; см. UpsertContact.
 func AddContact(c Contact) error {
+	_, err := UpsertContact(c)
+	return err
+}
+
+// UpsertContact добавляет контакт или обновляет существующий (тот же человек),
+// дополняя пустые поля старыми значениями. Возвращает сохранённую запись.
+func UpsertContact(c Contact) (Contact, error) {
 	c.Name = strings.TrimSpace(c.Name)
 	c.PeerID = strings.TrimSpace(c.PeerID)
+	c.UserID = strings.TrimSpace(c.UserID)
 	c.IP = strings.Trim(strings.TrimSpace(c.IP), "[]")
 	c.Port = strings.TrimSpace(c.Port)
-	if c.Name == "" || c.PeerID == "" || c.IP == "" || c.Port == "" {
-		return fmt.Errorf("name, peer_id, ip and port are required")
+
+	if c.Name == "" {
+		return Contact{}, fmt.Errorf("name is required")
 	}
-	if _, err := net.ResolveTCPAddr("tcp", c.Address()); err != nil {
-		return fmt.Errorf("invalid contact address: %w", err)
+	if c.PeerID == "" && c.UserID == "" {
+		return Contact{}, fmt.Errorf("peer_id or user_id is required")
+	}
+	if (c.IP == "") != (c.Port == "") {
+		return Contact{}, fmt.Errorf("ip and port must be set together")
+	}
+	if c.IP != "" {
+		if _, err := net.ResolveTCPAddr("tcp", c.Address()); err != nil {
+			return Contact{}, fmt.Errorf("invalid contact address: %w", err)
+		}
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
+
 	for i := range contacts {
-		if contacts[i].PeerID == c.PeerID || strings.EqualFold(contacts[i].Name, c.Name) {
-			contacts[i] = c
-			version++
-			return nil
+		if !sameIdentity(contacts[i], c) {
+			continue
+		}
+		old := contacts[i]
+		if c.PeerID == "" {
+			c.PeerID = old.PeerID
+		}
+		if c.UserID == "" {
+			c.UserID = old.UserID
+		}
+		if c.IP == "" {
+			c.IP, c.Port = old.IP, old.Port
+		}
+		if nameTakenLocked(c.Name, i) {
+			c.Name = old.Name
+		}
+		contacts[i] = c
+		version++
+		return c, nil
+	}
+
+	// Новый человек с уже занятым именем (например, два "Иван Иванов"):
+	// дописываем логин или хвост peer_id, чтобы имя осталось уникальным ключом.
+	if nameTakenLocked(c.Name, -1) {
+		suffix := c.UserID
+		if suffix == "" {
+			suffix = tail(c.PeerID, 4)
+		}
+		c.Name = fmt.Sprintf("%s (%s)", c.Name, suffix)
+		if nameTakenLocked(c.Name, -1) {
+			return Contact{}, fmt.Errorf("contact name already exists: %s", c.Name)
 		}
 	}
 	contacts = append(contacts, c)
 	version++
-	return nil
+	return c, nil
 }
 
 func DeleteContact(query string) error {
@@ -141,10 +225,8 @@ func RenameContact(query, newName string) error {
 	if i < 0 {
 		return fmt.Errorf("contact not found: %s", query)
 	}
-	for j := range contacts {
-		if j != i && strings.EqualFold(contacts[j].Name, newName) {
-			return fmt.Errorf("contact name already exists: %s", newName)
-		}
+	if nameTakenLocked(newName, i) {
+		return fmt.Errorf("contact name already exists: %s", newName)
 	}
 	contacts[i].Name = newName
 	version++
@@ -180,6 +262,9 @@ func AddBlocked(query, reason string) error {
 
 	peerID, name := query, ""
 	if i := findContactLocked(query); i >= 0 {
+		if contacts[i].PeerID == "" {
+			return fmt.Errorf("contact has no known device to block: %s", query)
+		}
 		peerID, name = contacts[i].PeerID, contacts[i].Name
 	}
 	for i := range blocked {

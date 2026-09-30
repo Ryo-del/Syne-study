@@ -1112,23 +1112,24 @@ func (s *Service) MarkChatRead(chatID string) error {
 }
 
 // ======================= contacts / blocklist =======================
-
 func (s *Service) AddContact(contact corechat.Contact) (corechat.Contact, error) {
 	sess, err := s.currentSession()
 	if err != nil {
 		return corechat.Contact{}, err
 	}
-	if err := corechat.AddContact(contact); err != nil {
-		return corechat.Contact{}, err
-	}
-	created, err := corechat.FindContact(strings.TrimSpace(contact.PeerID))
+	created, err := corechat.UpsertContact(contact)
 	if err != nil {
 		return corechat.Contact{}, err
 	}
-	if s.node != nil {
+	if s.node != nil && created.PeerID != "" && created.Address() != "" {
 		_ = s.node.RememberHint(created.PeerID, created.Address())
 	}
-	if userID := s.userForPeer(created.PeerID); userID != "" && userID != sess.UserID {
+
+	userID := created.UserID
+	if userID == "" && created.PeerID != "" {
+		userID = s.userForPeer(created.PeerID)
+	}
+	if userID != "" && userID != sess.UserID {
 		history.TouchChat(history.ChatRecord{
 			ChatID:     privateChatID(sess.UserID, userID),
 			PeerID:     created.PeerID,
@@ -1153,11 +1154,7 @@ func (s *Service) RenameContact(query, newName string) (corechat.Contact, error)
 }
 
 func (s *Service) DeleteContact(query string) error {
-	contact, err := corechat.FindContact(query)
-	if err != nil {
-		return err
-	}
-	if err := corechat.DeleteContact(contact.PeerID); err != nil {
+	if err := corechat.DeleteContact(query); err != nil {
 		return err
 	}
 	s.emit(Event{Type: "contact_deleted", Timestamp: time.Now().UnixMilli()})
@@ -1213,27 +1210,6 @@ func (s *Service) UnblockPeer(query string) error {
 
 func (s *Service) UpdateLocalPeerID(peerID string) error {
 	return fmt.Errorf("peer_id is derived from .identity and cannot be changed from UI")
-}
-
-// ======================= invites =======================
-
-func (s *Service) GetInviteCode() (InviteCode, error) {
-	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
-	rec, err := s.node.PublishInvite(code, defaultInviteTTL)
-	if err != nil {
-		return InviteCode{}, err
-	}
-	return InviteCode{Code: code, PeerID: rec.PeerID, ExpiresAt: rec.ExpiresAt}, nil
-}
-
-func (s *Service) ResolveInviteCode(code string) (string, error) {
-	ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
-	defer cancel()
-	peerID, err := s.node.ResolveInvite(ctx, code)
-	if err != nil {
-		return "", fmt.Errorf("код не найден или сеть недоступна: %w", err)
-	}
-	return peerID, nil
 }
 
 // ======================= neighbors (LAN discovery) =======================
@@ -1383,8 +1359,14 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 		return nil, err
 	}
 	contactMap := make(map[string]corechat.Contact, len(contacts))
+	contactByUser := make(map[string]corechat.Contact, len(contacts))
 	for _, item := range contacts {
-		contactMap[item.PeerID] = item
+		if item.PeerID != "" {
+			contactMap[item.PeerID] = item
+		}
+		if item.UserID != "" {
+			contactByUser[item.UserID] = item
+		}
 	}
 	blockedSet := make(map[string]struct{}, len(blocked))
 	for _, item := range blocked {
@@ -1398,10 +1380,18 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 	for _, record := range records {
 		addr := ""
 		title := ""
-		if c, ok := contactMap[record.PeerID]; ok {
+		c, ok := contactByUser[record.PeerUserID]
+		if !ok && record.PeerID != "" {
+			// старые контакты без user_id
+			if pc, found := contactMap[record.PeerID]; found &&
+				(pc.UserID == "" || pc.UserID == record.PeerUserID) {
+				c, ok = pc, true
+			}
+		}
+		if ok {
 			addr = c.Address()
 			title = c.Name
-		} else if n, ok := s.neighbors[record.PeerID]; ok {
+		} else if n, found := s.neighbors[record.PeerID]; found {
 			addr = n.Addr
 		}
 		if title == "" {

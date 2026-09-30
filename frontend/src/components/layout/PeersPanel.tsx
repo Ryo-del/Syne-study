@@ -363,17 +363,6 @@ export default function PeersPanel({
                             contact.peer_id}
                         </strong>
                       </div>
-
-                      <div className="peer-card-info-bottom">
-                        <span>
-                          {contact.ip}:
-                          {contact.port}
-                        </span>
-
-                        <span className="live-tag">
-                          saved
-                        </span>
-                      </div>
                     </div>
                   </button>
                 </div>

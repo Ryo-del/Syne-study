@@ -3,6 +3,7 @@ import type {
   BlockedPeer,
   ChatSummary,
   Contact,
+  DirectoryUser,
   InviteCode,
   Profile,
   Snapshot,
@@ -174,7 +175,19 @@ export function renameContact(query: string, name: string) {
     body: JSON.stringify({ name }),
   });
 }
-
+export async function searchDirectory(
+  query: string,
+  signal?: AbortSignal,
+): Promise<DirectoryUser[]> {
+  const url = new URL("/api/directory", getApiBase());
+  if (query.trim()) url.searchParams.set("q", query.trim());
+  const res = await fetch(url.toString(), { signal });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
 export function deleteContact(query: string) {
   return request<{ ok: true }>(`/api/contacts/${encodeURIComponent(query)}`, {
     method: "DELETE",

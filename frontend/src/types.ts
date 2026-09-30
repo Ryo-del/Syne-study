@@ -3,6 +3,7 @@ export type Contact = {
   peer_id: string;
   ip: string;
   port: string;
+    user_id?: string;
 };
 
 export type BlockedPeer = {
@@ -20,7 +21,15 @@ export type PeerPresence = {
   last_seen: number;
   blocked: boolean;
 };
-
+export interface DirectoryUser {
+  login: string;
+  fname: string;
+  sname: string;
+  role: string;
+  peer_id: string; // пусто, если не в сети
+  online: boolean;
+  
+}
 export type OnlineUser = {
   user_id: string;
   peer_id: string;
@@ -41,6 +50,7 @@ export type ChatSummary = {
   online: boolean;
   blocked: boolean;
   unread_count: number;
+  peer_user_id?: string;
 };
 
 export type UIMessage = {

@@ -9,18 +9,17 @@ import {
 } from "react";
 
 import {
-  blockPeer,
+    blockPeer,
+  searchDirectory,
   clearChatHistory,
   deleteContact,
   getApiBase,
   listenEvents,
   loadBootstrap,
-  loadInviteCode,
   loadMessages,
   markChatRead,
   openPrivateChat,
   renameContact,
-  resolveInviteCode,
   saveContact,
   sendMessage,
   deleteChat,
@@ -35,9 +34,9 @@ import {
 
 import type {
   AppEvent,
-  ChatSummary,
+  DirectoryUser,
   Contact,
-  InviteCode,
+  ChatSummary,
   Snapshot,
   UIMessage,
 } from "./types";
@@ -70,9 +69,7 @@ import {
 } from "./lib/format";
 
 import {
-  buildContactDraft,
-  buildEmptyContact,
-  EMPTY_CONTACT,
+  buildQuickContact,
 } from "./lib/contacts";
 
 import {
@@ -161,15 +158,6 @@ export default function App() {
   const [showNewContactPopover, setShowNewContactPopover] =
     useState(false);
 
-  const [contactForm, setContactForm] =
-    useState<Contact>(EMPTY_CONTACT);
-
-  const [inviteCode, setInviteCode] =
-    useState<InviteCode | null>(null);
-
-  const [invitePeerIdDraft, setInvitePeerIdDraft] =
-    useState("");
-
   const [blockReason, setBlockReason] =
     useState("");
 
@@ -231,7 +219,7 @@ useEffect(() => {
         ? (stored as NotificationSound)
         : "chime";
     });
-
+    
   const [appLanguage, setAppLanguage] =
     useState<AppLanguage>(() => {
       const stored =
@@ -366,14 +354,13 @@ useEffect(() => {
     ) ?? null;
     
   const selectedContact =
-    selectedChat
-      ? snapshot.contacts.find(
-          (item) =>
-            item.peer_id ===
-            selectedChat.peer_id,
-        ) ?? null
-      : null;
-        
+  selectedChat
+    ? snapshot.contacts.find((c) =>
+        c.user_id && selectedChat.peer_user_id
+          ? c.user_id === selectedChat.peer_user_id
+          : !!c.peer_id && c.peer_id === selectedChat.peer_id,
+      ) ?? null
+    : null;
   const selectedPeer =
     selectedChat
       ? snapshot.neighbors.find(
@@ -805,11 +792,24 @@ useEffect(() => {
           ? "Search nearby peers..."
           : "Search blocked peers...";
 
-  async function handleOpenPeer(peerId: string, peerAddr?: string, name?: string) {
-    try {
-      setError("");
-      const resolvedName = (name && name !== peerId) ? name : `Anonymous ${peerId.slice(-4)}`;
-      const chat = await openPrivateChat({ peer_id: peerId, peer_addr: peerAddr, name: resolvedName });
+ async function handleOpenPeer(
+  peerId: string,
+  peerAddr?: string,
+  name?: string,
+  userId?: string,
+) {
+  try {
+    setError("");
+    const resolvedName =
+      name && name !== peerId
+        ? name
+        : `Anonymous ${(peerId || userId || "").slice(-4)}`;
+    const chat = await openPrivateChat({
+      peer_id: peerId,
+      peer_addr: peerAddr,
+      name: resolvedName,
+      user_id: userId,
+    });
       unhideChat(chat.chat_id);
       startTransition(() => {
         setSnapshot((current) => ({
@@ -850,25 +850,7 @@ useEffect(() => {
     }
   }
 
-  async function handleSaveContact() {
-    if (!contactForm.name || !contactForm.peer_id || !contactForm.ip || !contactForm.port) {
-      setError("Fill all contact fields");
-      return;
-    }
-    try {
-      setSaving(true);
-      setError("");
-      await saveContact(contactForm);
-      await refreshBootstrap();
-      setShowNewContactPopover(false);
-      setContactForm(buildEmptyContact());
-    } catch (err) {
-      setError(describeError(err, "Failed to save contact"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
+  
   async function handleCommitPeerName() {
     if (!selectedChat || !peerNameDraft.trim()) {
       setEditingPeerName(false);
@@ -877,19 +859,18 @@ useEffect(() => {
     try {
       setSaving(true);
       setError("");
-      if (selectedContact) {
-        await renameContact(selectedChat.peer_id, peerNameDraft.trim());
-      } else {
-        const draft = buildContactDraft(selectedChat, selectedAddr);
-        if (!draft.ip || !draft.port) {
-          setError("Peer address is not known yet. Open the peer or add the contact manually.");
-          return;
-        }
-        await saveContact({
-          ...draft,
-          name: peerNameDraft.trim(),
-        });
-      }
+     if (selectedContact) {
+  await renameContact(
+    selectedContact.user_id || selectedContact.peer_id,
+    peerNameDraft.trim(),
+  );
+} else {
+  await saveContact({
+    ...buildQuickContact(selectedChat, selectedAddr),
+    name: peerNameDraft.trim(),
+  });
+}
+      
       await refreshBootstrap();
       setEditingPeerName(false);
     } catch (err) {
@@ -898,9 +879,50 @@ useEffect(() => {
       setSaving(false);
     }
   }
+async function addContact(contact: Contact) {
+  try {
+    setSaving(true);
+    setError("");
+    await saveContact(contact);
+    await refreshBootstrap();
+  } catch (err) {
+    setError(describeError(err, "Failed to save contact"));
+  } finally {
+    setSaving(false);
+  }
+}
 
+// Плюс в окне New contact
+function handleAddDirectoryUser(user: DirectoryUser) {
+  return addContact({
+    name: `${user.fname} ${user.sname}`.trim() || user.login,
+    user_id: user.login,
+    peer_id: user.peer_id,
+    ip: "",
+    port: "",
+  });
+}
+
+// Кнопка "Add contact" над чатом: сразу в контакты, без окон
+function handleQuickAddContact() {
+  if (!selectedChat || selectedContact) return;
+  return addContact(buildQuickContact(selectedChat, selectedAddr));
+}
+
+async function handleOpenContact(contact: Contact) {
+  await handleOpenPeer(
+    contact.peer_id,
+  
+    contact.name || contact.peer_id,
+    contact.user_id,
+  );
+}
   async function handleDeleteContact(peerId?: string) {
-    const targetPeerId = peerId ?? selectedChat?.peer_id;
+    const targetPeerId =
+  peerId ??
+  (selectedContact
+    ? selectedContact.user_id || selectedContact.peer_id
+    : selectedChat?.peer_id);
     if (!targetPeerId) return;
     try {
       setSaving(true);
@@ -968,25 +990,7 @@ useEffect(() => {
   window.addEventListener("beforeunload", onUnload);
   return () => window.removeEventListener("beforeunload", onUnload);
 }, [authenticated]);
-  async function handleOpenInvitePeer() {
-    const code = invitePeerIdDraft.trim();
-    if (!code) {
-      setError("Enter a 6-digit code");
-      return;
-    }
-    try {
-      setSaving(true);
-      setError("");
-      const { peer_id } = await resolveInviteCode(code);
-      await handleOpenPeer(peer_id);
-      setInvitePeerIdDraft("");
-      setShowNewContactPopover(false);
-    } catch (err) {
-      setError(describeError(err, "Failed to resolve invite code"));
-    } finally {
-      setSaving(false);
-    }
-  }
+
   function handleSettings() {
     setActiveSettingsSection(null);
     setShowSettings(true);
@@ -1054,23 +1058,7 @@ useEffect(() => {
     setActiveSettingsSection(null);
   }
 
-  async function openManualContactPopover() {
-    setContactForm(buildEmptyContact());
-    setInvitePeerIdDraft("");
-    setInviteCode(null);
-    setShowNewContactPopover(true);
-    try {
-      const invite = await loadInviteCode();
-      setInviteCode(invite);
-    } catch {
-      setInviteCode({ code: "Unavailable", peer_id: "", expires_at: 0 });
-    }
-  }
-
-  function prefillFromCurrentPeer() {
-    setContactForm(buildContactDraft(selectedChat, selectedAddr));
-    setShowNewContactPopover(true);
-  }
+  
 
   function updateSelfEmoji(nextEmoji: string) {
     setSelfEmoji(nextEmoji);
@@ -1133,7 +1121,6 @@ useEffect(() => {
       setError(describeError(err, "Failed to delete chat"));
     }
   }
-  
   function handleChatContextMenu(event: React.MouseEvent, chatId: string) {
     event.preventDefault();
     event.stopPropagation();
@@ -1277,19 +1264,7 @@ const previousChatIdRef = useRef<string>("");
                 name,
               );
             }}
-            onOpenContact={(contact) => {
-              setContactContextMenu(null);
-
-              void handleOpenPeer(
-                contact.peer_id,
-                joinAddress(
-                  contact.ip,
-                  contact.port,
-                ),
-                contact.name ||
-                  contact.peer_id,
-              );
-            }}
+            
             onChatContextMenu={
               handleChatContextMenu
             }
@@ -1300,11 +1275,13 @@ const previousChatIdRef = useRef<string>("");
               getPeerAvatar
             }
             onUnblock={(peerId) => {
-              void handleUnblock(peerId);
-            }}
-            onNewContact={
-              openManualContactPopover
-            }
+  void handleUnblock(peerId);
+}}
+onNewContact={() => setShowNewContactPopover(true)}
+onOpenContact={(contact) => {
+  setContactContextMenu(null);
+  void handleOpenContact(contact);
+}}
           />
         )}
 
@@ -1343,9 +1320,7 @@ const previousChatIdRef = useRef<string>("");
           messageStreamRef={
             messageStreamRef
           }
-          onAddContact={
-            prefillFromCurrentPeer
-          }
+          onAddContact={() => { void handleQuickAddContact(); }}
           onComposerChange={
             setComposer
           }
@@ -1457,36 +1432,14 @@ const previousChatIdRef = useRef<string>("");
       ) : null}
 
       {showNewContactPopover ? (
-        <ContactPopover
-          contactForm={contactForm}
-          inviteCode={inviteCode}
-          invitePeerIdDraft={
-            invitePeerIdDraft
-          }
-          saving={saving}
-          selectedChat={selectedChat}
-          onClose={() =>
-            setShowNewContactPopover(
-              false,
-            )
-          }
-          onInvitePeerIdChange={
-            setInvitePeerIdDraft
-          }
-          onContactFormChange={
-            setContactForm
-          }
-          onOpenInvitePeer={() => {
-            void handleOpenInvitePeer();
-          }}
-          onPrefillCurrentPeer={
-            prefillFromCurrentPeer
-          }
-          onSaveContact={() => {
-            void handleSaveContact();
-          }}
-        />
-      ) : null}
+  <ContactPopover
+    contacts={snapshot.contacts}
+    saving={saving}
+    getPeerAvatar={getPeerAvatar}
+    onAdd={(user) => { void handleAddDirectoryUser(user); }}
+    onClose={() => setShowNewContactPopover(false)}
+  />
+) : null}
 
       <ErrorToast
         error={error}

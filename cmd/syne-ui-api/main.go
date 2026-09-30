@@ -71,8 +71,7 @@ func main() {
 	mux.HandleFunc("/api/chats/history", srv.handleClearChatHistory)
 	mux.HandleFunc("/api/chats/", srv.handleChatRoutes)
 	mux.HandleFunc("/api/messages", srv.handleSendMessage)
-	mux.HandleFunc("/api/invite", srv.handleInvite)
-	mux.HandleFunc("/api/invite/resolve", srv.handleResolveInvite)
+
 	mux.HandleFunc("/api/contacts", srv.handleContacts)
 	mux.HandleFunc("/api/contacts/", srv.handleContactRoutes)
 	mux.HandleFunc("/api/blocked", srv.handleBlocked)
@@ -80,6 +79,7 @@ func main() {
 	mux.HandleFunc("/api/auth/register", srv.handleRegister)
 	mux.HandleFunc("/api/auth/login", srv.handleLogin)
 	mux.HandleFunc("/api/auth/logout", srv.handleLogout)
+	mux.HandleFunc("/api/directory", srv.handleDirectory)
 	mux.HandleFunc("/api/auth/claim", srv.handleClaim)
 
 	httpServer := &http.Server{
@@ -183,7 +183,18 @@ func (s *server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
-
+func (s *server) handleDirectory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	users, err := s.service.SearchDirectory(r.Context(), r.URL.Query().Get("q"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -231,13 +242,13 @@ func (s *server) handleOpenChat(w http.ResponseWriter, r *http.Request) {
 		PeerID   string `json:"peer_id"`
 		PeerAddr string `json:"peer_addr"`
 		Name     string `json:"name"`
-		ChatID   string `json:"chat_id"`
+		UserID   string `json:"user_id"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	summary, err := s.service.OpenPrivateChat(req.PeerID, req.PeerAddr, req.Name, req.ChatID)
+	summary, err := s.service.OpenPrivateChat(req.PeerID, req.PeerAddr, req.Name, req.UserID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -345,41 +356,6 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, message)
-}
-
-func (s *server) handleInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	invite, err := s.service.GetInviteCode()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, invite)
-}
-
-func (s *server) handleResolveInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	var req struct {
-		Code string `json:"code"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	peerID, err := s.service.ResolveInviteCode(req.Code)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"peer_id": peerID,
-	})
 }
 
 func (s *server) handleContacts(w http.ResponseWriter, r *http.Request) {

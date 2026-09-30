@@ -1742,3 +1742,82 @@ button {
     max-width: 88%;
   }
 }
+.directory-search {
+  width: 100%;
+  margin: 12px 0;
+}
+.directory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.directory-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+.directory-row:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+.directory-avatar {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(127, 127, 127, 0.2);
+  font-size: 18px;
+}
+.directory-online {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+  border: 2px solid #111;
+}
+.directory-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directory-add {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.directory-add:hover:not(:disabled) {
+  background: #16a34a;
+}
+.directory-add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.directory-added {
+  width: 30px;
+  flex: none;
+  text-align: center;
+  color: #22c55e;
+}
+.directory-empty {
+  padding: 16px;
+  text-align: center;
+  opacity: 0.6;
+}
