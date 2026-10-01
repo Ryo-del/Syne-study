@@ -60,8 +60,9 @@ interface PeersPanelProps {
     label: string,
   ) => string;
 
+  // query: user_id (логин) блокировки, а для старых записей peer_id
   onUnblock: (
-    peerId: string,
+    query: string,
   ) => void;
 
   onNewContact: () => void;
@@ -331,7 +332,12 @@ export default function PeersPanel({
             {filteredContacts.map(
               (contact) => (
                 <div
-                  key={contact.peer_id}
+                  // у контактов из каталога peer_id пустой — ключ по логину
+                  key={
+                    contact.user_id ||
+                    contact.peer_id ||
+                    contact.name
+                  }
                   className="chat-list-row"
                 >
                   <button
@@ -339,7 +345,9 @@ export default function PeersPanel({
                     onContextMenu={(event) =>
                       onContactContextMenu(
                         event,
-                        contact.peer_id,
+                        // удаление ищет и по логину, и по peer_id
+                        contact.user_id ||
+                          contact.peer_id,
                       )
                     }
                     onClick={() =>
@@ -381,35 +389,46 @@ export default function PeersPanel({
           <>
             <div className="sidebar-blocked-list">
               {filteredBlockedPeers.map(
-                (item) => (
-                  <div
-                    key={item.peer_id}
-                    className="blocked-item sidebar-blocked-item"
-                  >
-                    <div className="blocked-info">
-                      <strong>
-                        {item.name ||
-                          "Unknown"}
-                      </strong>
+                (item) => {
+                  const blockKey =
+                    item.user_id ||
+                    item.peer_id;
+                  const reason =
+                    item.reason?.trim();
 
-                      <span>
-                        {item.reason ||
-                          item.peer_id}
-                      </span>
-                    </div>
-
-                    <button
-                      className="ghost-tiny"
-                      onClick={() =>
-                        onUnblock(
-                          item.peer_id,
-                        )
-                      }
+                  return (
+                    <div
+                      key={blockKey}
+                      className="blocked-item sidebar-blocked-item"
                     >
-                      Unblock
-                    </button>
-                  </div>
-                ),
+                      <div className="blocked-info">
+                        <strong>
+                          {item.name ||
+                            item.user_id ||
+                            item.peer_id ||
+                            "Unknown"}
+                        </strong>
+
+                        {reason ? (
+                          <span>
+                            {reason}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <button
+                        className="ghost-tiny"
+                        onClick={() =>
+                          onUnblock(
+                            blockKey,
+                          )
+                        }
+                      >
+                        Unblock
+                      </button>
+                    </div>
+                  );
+                },
               )}
             </div>
 

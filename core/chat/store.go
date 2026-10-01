@@ -34,7 +34,8 @@ func (c Contact) Address() string {
 
 type BlockedPeer struct {
 	Name    string `json:"name,omitempty"`
-	PeerID  string `json:"peer_id"`
+	UserID  string `json:"user_id,omitempty"` // новое: ключ блокировки
+	PeerID  string `json:"peer_id"`           // справочно
 	AddedAt int64  `json:"added_at"`
 	Reason  string `json:"reason,omitempty"`
 }
@@ -70,6 +71,39 @@ func sameIdentity(a, b Contact) bool {
 		return a.UserID == b.UserID
 	}
 	return a.PeerID != "" && a.PeerID == b.PeerID
+}
+
+// IsBlockedUser: заблокирован ли аккаунт.
+func IsBlockedUser(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, it := range blocked {
+		if it.UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsBlocked: только для СТАРЫХ записей без UserID. Запись с UserID устройство
+// не блокирует: за тем же ПК может зайти другой аккаунт.
+func IsBlocked(peerID string) (bool, error) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return false, fmt.Errorf("peer_id is required")
+	}
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, it := range blocked {
+		if it.UserID == "" && it.PeerID == peerID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // findContactLocked: сначала точное совпадение по UserID/PeerID, потом по имени.
@@ -232,23 +266,71 @@ func RenameContact(query, newName string) error {
 	version++
 	return nil
 }
-
-// ---------- blocklist ----------
-
-func IsBlocked(peerID string) (bool, error) {
-	peerID = strings.TrimSpace(peerID)
-	if peerID == "" {
-		return false, fmt.Errorf("peer_id is required")
+func AddBlockedPeer(b BlockedPeer) error {
+	b.UserID = strings.TrimSpace(b.UserID)
+	b.PeerID = strings.TrimSpace(b.PeerID)
+	b.Name = strings.TrimSpace(b.Name)
+	b.Reason = strings.TrimSpace(b.Reason)
+	if b.UserID == "" && b.PeerID == "" {
+		return fmt.Errorf("user_id or peer_id is required")
 	}
-	mu.RLock()
-	defer mu.RUnlock()
-	for _, it := range blocked {
-		if it.PeerID == peerID {
-			return true, nil
+	if b.AddedAt == 0 {
+		b.AddedAt = time.Now().UnixMilli()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range blocked {
+		same := (b.UserID != "" && blocked[i].UserID == b.UserID) ||
+			(b.UserID == "" && blocked[i].UserID == "" && blocked[i].PeerID == b.PeerID)
+		if !same {
+			continue
+		}
+		if b.Name != "" {
+			blocked[i].Name = b.Name
+		}
+		if b.PeerID != "" {
+			blocked[i].PeerID = b.PeerID
+		}
+		if b.Reason != "" {
+			blocked[i].Reason = b.Reason
+		}
+		version++
+		return nil
+	}
+	blocked = append(blocked, b)
+	version++
+	return nil
+}
+
+func RemoveBlocked(query string) error {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return fmt.Errorf("query is required")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range blocked {
+		if (blocked[i].UserID != "" && blocked[i].UserID == query) ||
+			(blocked[i].PeerID != "" && blocked[i].PeerID == query) ||
+			(blocked[i].Name != "" && strings.EqualFold(blocked[i].Name, query)) {
+			blocked = append(blocked[:i], blocked[i+1:]...)
+			version++
+			return nil
 		}
 	}
-	return false, nil
+	return fmt.Errorf("blocked peer not found: %s", query)
 }
+
+func ListBlocked() ([]BlockedPeer, error) {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]BlockedPeer, len(blocked))
+	copy(out, blocked)
+	return out, nil
+}
+
+// ---------- blocklist ----------
 
 func AddBlocked(query, reason string) error {
 	query = strings.TrimSpace(query)
@@ -287,31 +369,6 @@ func AddBlocked(query, reason string) error {
 	})
 	version++
 	return nil
-}
-
-func RemoveBlocked(query string) error {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return fmt.Errorf("query is required")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	for i := range blocked {
-		if blocked[i].PeerID == query || (blocked[i].Name != "" && strings.EqualFold(blocked[i].Name, query)) {
-			blocked = append(blocked[:i], blocked[i+1:]...)
-			version++
-			return nil
-		}
-	}
-	return fmt.Errorf("blocked peer not found: %s", query)
-}
-
-func ListBlocked() ([]BlockedPeer, error) {
-	mu.RLock()
-	defer mu.RUnlock()
-	out := make([]BlockedPeer, len(blocked))
-	copy(out, blocked)
-	return out, nil
 }
 
 // ---------- vault ----------

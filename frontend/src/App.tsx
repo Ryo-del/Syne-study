@@ -936,24 +936,55 @@ async function handleOpenContact(contact: Contact) {
       setSaving(false);
     }
   }
-  
+  useEffect(() => {
+  if (import.meta.env.DEV) return; // в dev оставляем консоль для отладки
+
+  // Убираем стандартное меню (Save as / Print / Inspect).
+  // Свои меню (чаты, контакты) продолжают работать: они вызывают свой preventDefault.
+  const onContextMenu = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea")) return; // копировать/вставить в полях
+    e.preventDefault();
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.toLowerCase();
+    const blocked =
+      e.key === "F12" ||
+      (mod && e.shiftKey && ["i", "j", "c"].includes(k)) || // DevTools
+      (e.metaKey && e.altKey && ["i", "j"].includes(k)) ||  // DevTools на macOS
+      (mod && ["p", "s", "u"].includes(k));                 // Print, Save as, View source
+    if (blocked) e.preventDefault();
+  };
+
+  window.addEventListener("contextmenu", onContextMenu);
+  window.addEventListener("keydown", onKeyDown, true);
+  return () => {
+    window.removeEventListener("contextmenu", onContextMenu);
+    window.removeEventListener("keydown", onKeyDown, true);
+  };
+}, []);
   async function handleBlock() {
-    if (!selectedChat) return;
-    try {
-      setSaving(true);
-      setError("");
-      await blockPeer({
-        query: selectedChat.peer_id,
-        reason: blockReason.trim(),
-      });
-      setBlockReason("");
-      await refreshBootstrap();
-    } catch (err) {
-      setError(describeError(err, "Failed to block peer"));
-    } finally {
-      setSaving(false);
-    }
+  if (!selectedChat) return;
+  try {
+    setSaving(true);
+    setError("");
+    await blockPeer({
+      query: selectedChat.peer_user_id || selectedChat.peer_id,
+      user_id: selectedChat.peer_user_id,
+      peer_id: selectedChat.peer_id,
+      name: selectedChat.title,
+      reason: blockReason.trim(),
+    });
+    setBlockReason("");
+    await refreshBootstrap();
+  } catch (err) {
+    setError(describeError(err, "Failed to block peer"));
+  } finally {
+    setSaving(false);
   }
+}
 
   async function handleUnblock(peerId: string) {
     try {

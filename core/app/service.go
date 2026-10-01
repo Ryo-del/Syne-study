@@ -375,6 +375,7 @@ func (s *Service) resetSessionState() {
 	for id, n := range s.neighbors {
 		n.UserID = ""
 		n.Name = id
+		n.Blocked = false
 		s.neighbors[id] = n
 	}
 	s.stateMu.Unlock()
@@ -453,7 +454,17 @@ func (s *Service) flushVault(sess *UserSession, force bool) error {
 	s.savedVer = ver
 	return nil
 }
-
+func isBlockedSender(peerID, userID string) bool {
+	if userID != "" && corechat.IsBlockedUser(userID) {
+		return true
+	}
+	if peerID != "" {
+		if ok, _ := corechat.IsBlocked(peerID); ok {
+			return true
+		}
+	}
+	return false
+}
 func (s *Service) autosaveLoop(ctx context.Context, sess *UserSession) {
 	defer s.sessWG.Done()
 	ticker := time.NewTicker(autosaveInterval)
@@ -702,7 +713,19 @@ func (s *Service) Snapshot() (Snapshot, error) {
 		onlineUsers = append(onlineUsers, item)
 	}
 	s.stateMu.RUnlock()
-
+	for i := range blocked {
+		uid := blocked[i].UserID
+		if uid == "" {
+			uid = s.userForPeer(blocked[i].PeerID) // для старых записей, только для показа
+		}
+		if uid != "" {
+			if n := s.displayName(uid); n != "" {
+				blocked[i].Name = n
+			} else if strings.TrimSpace(blocked[i].Name) == "" {
+				blocked[i].Name = uid
+			}
+		}
+	}
 	sort.Slice(neighbors, func(i, j int) bool {
 		if neighbors[i].LastSeen == neighbors[j].LastSeen {
 			return neighbors[i].PeerID < neighbors[j].PeerID
@@ -820,9 +843,6 @@ func (s *Service) OpenPrivateChat(peerID, peerAddr, name, userID string) (ChatSu
 	name = strings.TrimSpace(name)
 	peerUser := strings.TrimSpace(userID)
 
-	if peerID == "" && peerUser == "" {
-		return ChatSummary{}, fmt.Errorf("peer_id is required")
-	}
 	if peerID != "" {
 		if blocked, err := corechat.IsBlocked(peerID); err != nil {
 			return ChatSummary{}, err
@@ -841,6 +861,12 @@ func (s *Service) OpenPrivateChat(peerID, peerAddr, name, userID string) (ChatSu
 	}
 	if peerUser == sess.UserID {
 		return ChatSummary{}, fmt.Errorf("cannot open a chat with yourself")
+	}
+	if corechat.IsBlockedUser(peerUser) {
+		return ChatSummary{}, fmt.Errorf("user is blocked: %s", peerUser)
+	}
+	if ok, _ := corechat.IsBlocked(peerID); ok && peerID != "" {
+		return ChatSummary{}, fmt.Errorf("peer is blocked: %s", peerID)
 	}
 	if peerID == "" {
 		peerID = s.peerIDForUser(peerUser)
@@ -877,10 +903,8 @@ func (s *Service) SendMessage(chatID, targetPeerID, text string) (UIMessage, err
 	if !ok || rec.PeerUserID == "" {
 		return UIMessage{}, fmt.Errorf("chat not found: %s", chatID)
 	}
-	if rec.PeerID != "" {
-		if blocked, _ := corechat.IsBlocked(rec.PeerID); blocked {
-			return UIMessage{}, fmt.Errorf("peer is blocked: %s", rec.PeerID)
-		}
+	if isBlockedSender(rec.PeerID, rec.PeerUserID) {
+		return UIMessage{}, fmt.Errorf("user is blocked: %s", rec.PeerUserID)
 	}
 
 	key, err := s.chatKeyFor(sess, rec.PeerUserID, chatID)
@@ -1000,7 +1024,7 @@ func (s *Service) routeMessage(sess *UserSession, msg protocol.Message, peerOnli
 func (s *Service) handlePacket(msg protocol.Message, sender peer.AddrInfo) error {
 	now := time.Now()
 	senderID := sender.ID.String()
-	if blocked, err := corechat.IsBlocked(senderID); err == nil && blocked {
+	if isBlockedSender(senderID, msg.FromUser) {
 		return errors.New("blocked")
 	}
 	if !s.allowRate(senderID, now, 20, 40) {
@@ -1035,8 +1059,8 @@ func (s *Service) ingestChat(sess *UserSession, msg protocol.Message, via string
 	if msg.FromUser == "" || msg.ChatID != privateChatID(msg.FromUser, msg.TargetUser) {
 		return permanent("inconsistent chat id")
 	}
-	if blocked, _ := corechat.IsBlocked(msg.From); blocked {
-		return nil
+	if isBlockedSender(msg.From, msg.FromUser) {
+		return nil // молча отбрасываем, из mailbox сообщение будет подтверждено
 	}
 	if history.HasMessage(msg.ID) {
 		return nil
@@ -1160,22 +1184,53 @@ func (s *Service) DeleteContact(query string) error {
 	s.emit(Event{Type: "contact_deleted", Timestamp: time.Now().UnixMilli()})
 	return nil
 }
-
-func (s *Service) BlockPeer(query, reason string) (corechat.BlockedPeer, error) {
-	if err := corechat.AddBlocked(query, reason); err != nil {
-		return corechat.BlockedPeer{}, err
-	}
-	items, err := corechat.ListBlocked()
+func (s *Service) BlockPeer(query, reason, name, userID, peerID string) (corechat.BlockedPeer, error) {
+	sess, err := s.currentSession()
 	if err != nil {
 		return corechat.BlockedPeer{}, err
 	}
-	for _, item := range items {
-		if item.PeerID == query || strings.EqualFold(item.Name, query) {
-			s.emit(Event{Type: "peer_blocked", Timestamp: time.Now().UnixMilli(), Blocked: &item})
-			return item, nil
+	query = strings.TrimSpace(query)
+	userID = strings.TrimSpace(userID)
+	peerID = strings.TrimSpace(peerID)
+	if userID == "" && peerID == "" {
+		peerID = query // старый вызов, где передавали только peer_id
+	}
+	if userID == "" {
+		if userID = s.userForPeer(peerID); userID == "" {
+			if userID, err = s.resolveUserID(peerID); err != nil {
+				return corechat.BlockedPeer{}, fmt.Errorf("cannot determine user to block: %w", err)
+			}
 		}
 	}
-	return corechat.BlockedPeer{}, fmt.Errorf("blocked peer not found after update")
+	if userID == "" {
+		return corechat.BlockedPeer{}, fmt.Errorf("cannot determine user to block")
+	}
+	if userID == sess.UserID {
+		return corechat.BlockedPeer{}, fmt.Errorf("cannot block yourself")
+	}
+	if peerID == "" {
+		peerID = s.peerIDForUser(userID)
+	}
+
+	display := s.displayName(userID)
+	if display == "" {
+		display = strings.TrimSpace(name)
+	}
+	if display == "" {
+		display = userID
+	}
+
+	item := corechat.BlockedPeer{
+		Name:   display,
+		UserID: userID,
+		PeerID: peerID,
+		Reason: strings.TrimSpace(reason),
+	}
+	if err := corechat.AddBlockedPeer(item); err != nil {
+		return corechat.BlockedPeer{}, err
+	}
+	s.emit(Event{Type: "peer_blocked", Timestamp: time.Now().UnixMilli(), Blocked: &item})
+	return item, nil
 }
 func (s *Service) DeleteChat(chatID string) error {
 	sess, err := s.currentSession()
@@ -1267,7 +1322,6 @@ func (s *Service) registerNeighbor(peerID, addr string) {
 	if peerID == "" || peerID == s.cfg.LocalID {
 		return
 	}
-	blocked, _ := corechat.IsBlocked(peerID)
 
 	s.stateMu.Lock()
 	existing, had := s.neighbors[peerID]
@@ -1277,7 +1331,7 @@ func (s *Service) registerNeighbor(peerID, addr string) {
 		Name:     existing.Name,
 		Addr:     addr,
 		LastSeen: time.Now().UnixMilli(),
-		Blocked:  blocked,
+		Blocked:  isBlockedSender(peerID, existing.UserID),
 	}
 	if item.Name == "" {
 		item.Name = peerID
@@ -1368,9 +1422,11 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 			contactByUser[item.UserID] = item
 		}
 	}
-	blockedSet := make(map[string]struct{}, len(blocked))
+	blockedUsers := make(map[string]struct{}, len(blocked))
 	for _, item := range blocked {
-		blockedSet[item.PeerID] = struct{}{}
+		if item.UserID != "" {
+			blockedUsers[item.UserID] = struct{}{}
+		}
 	}
 
 	s.stateMu.RLock()
@@ -1406,7 +1462,12 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 		if title == "" {
 			title = record.PeerID
 		}
-		_, isBlocked := blockedSet[record.PeerID]
+		_, isBlocked := blockedUsers[record.PeerUserID]
+		if !isBlocked && record.PeerID != "" {
+			if ok, _ := corechat.IsBlocked(record.PeerID); ok {
+				isBlocked = true
+			}
+		}
 		_, online := s.onlineUsers[record.PeerUserID]
 		chats = append(chats, ChatSummary{
 			ChatID:        record.ChatID,

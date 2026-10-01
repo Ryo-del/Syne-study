@@ -429,13 +429,16 @@ func (s *server) handleBlocked(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query  string `json:"query"`
 			Reason string `json:"reason"`
+			Name   string `json:"name"`
+			UserID string `json:"user_id"`
+			PeerID string `json:"peer_id"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		svc := s.service
-		item, err := svc.BlockPeer(req.Query, req.Reason)
+		item, err := svc.BlockPeer(req.Query, req.Reason, req.Name, req.UserID, req.PeerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

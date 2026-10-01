@@ -194,7 +194,13 @@ export function deleteContact(query: string) {
   });
 }
 
-export function blockPeer(payload: { query: string; reason?: string }) {
+export function blockPeer(payload: {
+  query: string;
+  reason?: string;
+  name?: string;
+  user_id?: string;
+  peer_id?: string;
+}) {
   return request<BlockedPeer>("/api/blocked", {
     method: "POST",
     body: JSON.stringify(payload),

@@ -1660,7 +1660,9 @@ button {
   max-height: 160px;
   overflow-y: auto;
 }
-
+@media print {
+  body { display: none !important; }
+}
 /* ─── Error toast ─── */
 
 .error-toast {

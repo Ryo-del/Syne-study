@@ -9,6 +9,7 @@ export type Contact = {
 export type BlockedPeer = {
   name?: string;
   peer_id: string;
+  user_id?: string; 
   added_at: number;
   reason?: string;
 };
