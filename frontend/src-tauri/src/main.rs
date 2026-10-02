@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{path::PathBuf, sync::Mutex};
-
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -23,7 +26,75 @@ fn backend_url() -> String {
 fn set_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), String> {
     set_platform_app_icon(app, icon_bytes)
 }
+fn log_line(app: &AppHandle, line: &str) {
+    eprintln!("{line}");
+    if let Ok(dir) = app.path().app_log_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("launch.log"))
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+fn read_first_line(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let text = if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        let raw = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        String::from_utf8_lossy(raw).into_owned()
+    };
+    text.lines()
+        .map(|l| l.trim().trim_start_matches('\u{feff}').trim())
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+}
 
+fn resolve_server_addr(app: &AppHandle) -> Option<String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("client-config.txt"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("client-config.txt"));
+    }
+    if cfg!(debug_assertions) {
+        candidates.push(repo_root().join("client-config.txt"));
+        candidates.push(repo_root().join("frontend/src-tauri/client-config.txt"));
+    }
+    if let Ok(app_config_dir) = app.path().app_config_dir() {
+        candidates.push(app_config_dir.join("client-config.txt"));
+    }
+
+    for candidate in candidates {
+        match read_first_line(&candidate) {
+            Some(addr) => {
+                log_line(app, &format!("server override: {} -> {addr}", candidate.display()));
+                return Some(addr);
+            }
+            None => log_line(app, &format!("server override: not found/empty: {}", candidate.display())),
+        }
+    }
+
+    log_line(app, "no client-config.txt found, backend will auto-discover the study server");
+    None
+}
 #[cfg(target_os = "macos")]
 fn set_platform_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), String> {
     use objc2::{AllocAnyThread, MainThreadMarker};
@@ -124,37 +195,7 @@ fn backend_workdir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn resolve_server_addr(app: &AppHandle) -> Option<String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
 
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("client-config.txt"));
-        }
-    }
-
-    if cfg!(debug_assertions) {
-        candidates.push(repo_root().join("client-config.txt"));
-        candidates.push(repo_root().join("frontend/src-tauri/client-config.txt"));
-    }
-
-    if let Ok(app_config_dir) = app.path().app_config_dir() {
-        candidates.push(app_config_dir.join("client-config.txt"));
-    }
-
-    for candidate in candidates {
-        if let Ok(contents) = std::fs::read_to_string(&candidate) {
-            let trimmed = contents.trim();
-            if !trimmed.is_empty() {
-                eprintln!("using manual server override from {}: {trimmed}", candidate.display());
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-
-    eprintln!("no client-config.txt override found — letting the backend auto-discover the study server");
-    None
-}
 
 fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
     let workdir = backend_workdir(app)?;
