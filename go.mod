@@ -118,3 +118,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
+
+replace github.com/Ryo-del/Syne-protocol => ../Syne-protocol

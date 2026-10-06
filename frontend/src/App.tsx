@@ -25,6 +25,7 @@ import {
   deleteChat,
   unblockPeer,
   logout,
+  authHeaders,
 } from "./lib/api";
 
 import {
@@ -381,7 +382,6 @@ useEffect(() => {
     selectedChat?.known_addr ||
     selectedPeer?.addr ||
     "";
-
   const selectedPeerEmoji =
     selectedChat
       ? peerEmojis[
@@ -1021,7 +1021,13 @@ useEffect(() => {
   window.addEventListener("beforeunload", onUnload);
   return () => window.removeEventListener("beforeunload", onUnload);
 }, [authenticated]);
-
+    const onUnload = () => {
+    void fetch(new URL("/api/auth/logout", getApiBase()).toString(), {
+      method: "POST",
+      keepalive: true,
+      headers: authHeaders(),
+    });
+  };
   function handleSettings() {
     setActiveSettingsSection(null);
     setShowSettings(true);
@@ -1039,7 +1045,7 @@ useEffect(() => {
     deleteHoldStartedAtRef.current = 0;
     setDeleteHoldProgress(0);
   }
-
+  
   async function confirmDeleteHistory() {
     stopDeleteHistoryHold();
     try {
@@ -1473,11 +1479,10 @@ onOpenContact={(contact) => {
 ) : null}
 
       <ErrorToast
-        error={error}
-        errorToastKey={
-          errorToastKey
-        }
-      />
+  error={error}
+  errorToastKey={errorToastKey}
+  onClose={() => setError("")}
+/>
 
       <ContextMenus
         chatContextMenu={

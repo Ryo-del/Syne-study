@@ -3,8 +3,10 @@
   "identifier": "default",
   "windows": ["main"],
   "permissions": [
-    "notification:default",
+    "core:default",
     "core:tray:default",
-    "core:window:allow-is-focused"
+    "core:window:allow-is-focused",
+    "notification:default",
+    "dialog:default"
   ]
 }

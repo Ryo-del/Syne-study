@@ -13,6 +13,14 @@ export type BlockedPeer = {
   added_at: number;
   reason?: string;
 };
+export type TransferProgress = {
+  id: string;
+  name: string;
+  done: number;
+  total: number; // 0 — размер неизвестен (архив папки)
+  state: "running" | "done" | "error";
+  error?: string;
+};
 
 export type PeerPresence = {
   peer_id: string;
@@ -94,5 +102,6 @@ export type AppEvent = {
   message?: UIMessage;
   contact?: Contact;
   blocked?: BlockedPeer;
+  transfer?: TransferProgress;
   error?: string;
 };

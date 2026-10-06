@@ -15,13 +15,86 @@ const API_ADDR: &str = "127.0.0.1:38673";
 
 struct BackendState {
     child: Mutex<Option<CommandChild>>,
+    token: String,
 }
-
 #[tauri::command]
 fn backend_url() -> String {
     format!("http://{API_ADDR}")
 }
+/// Случайный токен на один запуск: им защищено локальное API (syne-ui-api).
+fn generate_token() -> String {
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf).expect("system random source is unavailable");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
 
+#[tauri::command]
+fn backend_token(state: tauri::State<'_, BackendState>) -> String {
+    state.token.clone()
+}
+
+const OPEN_DIR_NAME: &str = "syne-open";
+
+/// Папка для файлов, скачанных ради «Открыть как». Чистится при каждом запуске.
+fn open_dir() -> PathBuf {
+    std::env::temp_dir().join(OPEN_DIR_NAME)
+}
+
+#[tauri::command]
+fn open_temp_dir() -> Result<String, String> {
+    let dir = open_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create the temp folder: {e}"))?;
+    dir.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| "temp folder path is not valid UTF-8".to_string())
+}
+
+/// Показывает системное окно «Открыть с помощью». Открывает только файлы из
+/// нашей временной папки: интерфейс не может использовать команду, чтобы
+/// запустить произвольный файл на компьютере.
+#[tauri::command]
+fn open_with_dialog(path: String) -> Result<(), String> {
+    let dir = open_dir()
+        .canonicalize()
+        .map_err(|e| format!("temp folder is unavailable: {e}"))?;
+    let file = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| format!("file is unavailable: {e}"))?;
+    if !file.starts_with(&dir) || !file.is_file() {
+        return Err("only files downloaded for opening can be opened".to_string());
+    }
+    spawn_open_as(Path::new(&path))
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_open_as(file: &Path) -> Result<(), String> {
+    // Окно «Каким образом вы хотите открыть этот файл?»
+    std::process::Command::new("rundll32.exe")
+        .arg("shell32.dll,OpenAs_RunDLL")
+        .arg(file)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot show the Open with dialog: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_open_as(file: &Path) -> Result<(), String> {
+    // В macOS нет такого системного окна: открываем в программе по умолчанию.
+    std::process::Command::new("open")
+        .arg(file)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot open the file: {e}"))
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn spawn_open_as(file: &Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(file)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot open the file: {e}"))
+}
 #[tauri::command]
 fn set_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), String> {
     set_platform_app_icon(app, icon_bytes)
@@ -197,7 +270,7 @@ fn backend_workdir(app: &AppHandle) -> Result<PathBuf, String> {
 
 
 
-fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
+fn spawn_backend(app: &AppHandle, token: &str) -> Result<CommandChild, String> {
     let workdir = backend_workdir(app)?;
     let workdir_str = workdir
         .to_str()
@@ -220,7 +293,8 @@ fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
         .shell()
         .sidecar("syne-ui-api")
         .map_err(|err| format!("failed to configure sidecar: {err}"))?
-        .args(args);
+        .args(args)
+        .env("SYNE_API_TOKEN", token);
     let (mut rx, child) = command
         .spawn()
         .map_err(|err| format!("failed to start sidecar: {err}"))?;
@@ -237,18 +311,27 @@ fn spawn_backend(app: &AppHandle) -> Result<CommandChild, String> {
     });
     Ok(child)
 }
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendState {
             child: Mutex::new(None),
+            token: generate_token(),
         })
-        .invoke_handler(tauri::generate_handler![backend_url, set_app_icon])
+        .invoke_handler(tauri::generate_handler![
+            backend_url,
+            backend_token,
+            set_app_icon,
+            open_temp_dir,
+            open_with_dialog
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
-            let child = spawn_backend(&handle)?;
+            let _ = std::fs::remove_dir_all(open_dir());
+            let token = app.state::<BackendState>().token.clone();
+            let child = spawn_backend(&handle, &token)?;
             app.state::<BackendState>()
                 .child
                 .lock()

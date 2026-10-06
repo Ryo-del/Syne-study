@@ -105,6 +105,7 @@ type Event struct {
 	OnlineUser *OnlineUser           `json:"online_user,omitempty"`
 	Chat       *ChatSummary          `json:"chat,omitempty"`
 	Message    *UIMessage            `json:"message,omitempty"`
+	Transfer   *TransferProgress     `json:"transfer,omitempty"`
 	Contact    *corechat.Contact     `json:"contact,omitempty"`
 	Blocked    *corechat.BlockedPeer `json:"blocked,omitempty"`
 	Error      string                `json:"error,omitempty"`
@@ -312,7 +313,7 @@ func (s *Service) beginSession(login string, r *p2ptransport.LoginResult) error 
 	s.session = sess
 	s.sessCancel = cancel
 	s.sessionMu.Unlock()
-
+	s.pushFileLists()
 	s.sessWG.Add(2)
 	go s.autosaveLoop(sessCtx, sess)
 	go s.mailboxLoop(sessCtx, sess)
@@ -477,6 +478,7 @@ func (s *Service) autosaveLoop(ctx context.Context, sess *UserSession) {
 			if err := s.flushVault(sess, false); err != nil {
 				fmt.Printf("autosave: %v\n", err)
 			}
+			s.resyncFileListsIfStale()
 		}
 	}
 }
@@ -1145,6 +1147,7 @@ func (s *Service) AddContact(contact corechat.Contact) (corechat.Contact, error)
 	if err != nil {
 		return corechat.Contact{}, err
 	}
+	s.pushFileLists()
 	if s.node != nil && created.PeerID != "" && created.Address() != "" {
 		_ = s.node.RememberHint(created.PeerID, created.Address())
 	}
@@ -1229,6 +1232,7 @@ func (s *Service) BlockPeer(query, reason, name, userID, peerID string) (corecha
 	if err := corechat.AddBlockedPeer(item); err != nil {
 		return corechat.BlockedPeer{}, err
 	}
+	s.pushFileLists()
 	s.emit(Event{Type: "peer_blocked", Timestamp: time.Now().UnixMilli(), Blocked: &item})
 	return item, nil
 }
@@ -1259,6 +1263,7 @@ func (s *Service) UnblockPeer(query string) error {
 	if err := corechat.RemoveBlocked(query); err != nil {
 		return err
 	}
+	s.pushFileLists()
 	s.emit(Event{Type: "peer_unblocked", Timestamp: time.Now().UnixMilli()})
 	return nil
 }

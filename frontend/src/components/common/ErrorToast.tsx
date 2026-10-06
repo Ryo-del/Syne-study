@@ -1,11 +1,13 @@
 interface ErrorToastProps {
   error: string;
   errorToastKey: number;
+  onClose: () => void;
 }
 
 export default function ErrorToast({
   error,
   errorToastKey,
+  onClose,
 }: ErrorToastProps) {
   if (!error) {
     return null;
@@ -23,6 +25,14 @@ export default function ErrorToast({
       </span>
 
       <p>{error}</p>
+
+      <button
+        id="Btnsend"
+        className="Btnsend"
+        onClick={onClose}
+      >
+        Сообщить об ошибке и закрыть
+      </button>
     </div>
   );
 }

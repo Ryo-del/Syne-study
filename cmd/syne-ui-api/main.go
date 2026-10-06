@@ -4,6 +4,7 @@ import (
 	"Syne/core/app"
 	corechat "Syne/core/chat"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,13 +32,17 @@ func main() {
 		workdir    string
 		serverAddr string
 	)
-	flag.StringVar(&addr, "addr", "0.0.0.0:38673", "HTTP listen address")
+	flag.StringVar(&addr, "addr", "127.0.0.1:38673", "HTTP listen address")
 	flag.StringVar(&localID, "id", "", "Local peer ID")
 	flag.IntVar(&port, "port", 3000, "Preferred local TCP port")
 	flag.StringVar(&workdir, "workdir", "", "Working directory for local data files")
 	flag.StringVar(&serverAddr, "server-addr", "", "Study Server libp2p multiaddr")
-	flag.Parse()
 
+	flag.Parse()
+	token := os.Getenv("SYNE_API_TOKEN")
+	if token == "" {
+		slog.Warn("SYNE_API_TOKEN is empty: the local API is not protected")
+	}
 	if strings.TrimSpace(workdir) != "" {
 		if err := os.MkdirAll(workdir, 0o755); err != nil {
 			log.Fatalf("create workdir: %v", err)
@@ -81,10 +86,11 @@ func main() {
 	mux.HandleFunc("/api/auth/logout", srv.handleLogout)
 	mux.HandleFunc("/api/directory", srv.handleDirectory)
 	mux.HandleFunc("/api/auth/claim", srv.handleClaim)
+	srv.registerFilesRoutes(mux)
 
 	httpServer := &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(mux),
+		Handler:           withGuard(token, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -104,6 +110,46 @@ func main() {
 	}
 }
 
+var allowedOrigins = map[string]bool{
+	"http://localhost:1420":   true, // vite dev
+	"tauri://localhost":       true, // Tauri (macOS/Linux)
+	"http://tauri.localhost":  true, // Tauri (Windows)
+	"https://tauri.localhost": true,
+}
+
+// withGuard: запросы только от окон Syne (Origin) и только с токеном. Токен
+// передаёт Tauri при запуске; EventSource не умеет заголовки, поэтому для
+// /api/events токен принимается и параметром ?token=.
+func withGuard(token string, next http.Handler) http.Handler {
+	want := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if !allowedOrigins[origin] {
+				writeError(w, http.StatusForbidden, "origin not allowed")
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Syne-Token")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if len(want) > 0 {
+			got := r.Header.Get("X-Syne-Token")
+			if got == "" && r.URL.Path == "/api/events" {
+				got = r.URL.Query().Get("token")
+			}
+			if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

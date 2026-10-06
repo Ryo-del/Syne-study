@@ -4,6 +4,7 @@ import SetPasswordWindow from "./SetPasswordWindow";
 
 interface AuthGateProps {
   onAuthenticated: () => void;
+  
 }
 
 type AuthMode =
