@@ -174,7 +174,12 @@ export default function App() {
 
   const [sidebarView, setSidebarView] =
     useState<SidebarView>("chats");
-
+    // Files остаётся смонтированным после первого открытия, иначе при переходе
+  // в чат пропали бы открытые .txt и несохранённые изменения.
+  const [filesOpened, setFilesOpened] = useState(false);
+  useEffect(() => {
+    if (sidebarView === "files") setFilesOpened(true);
+  }, [sidebarView]);
   const [showSettings, setShowSettings] =
     useState(false);
     
@@ -1009,6 +1014,7 @@ async function handleOpenContact(contact: Contact) {
     setComposer("");
     setShowDetailPanel(false);
     setSidebarView("chats");
+    setFilesOpened(false);
     setLoading(true);
   });
 }
@@ -1254,10 +1260,13 @@ const previousChatIdRef = useRef<string>("");
           }}
         />
 
-                               {sidebarView === "files" ? (
-          <Files />
-        ) : (
-          <>
+           {filesOpened && (
+          <div style={{ display: sidebarView === "files" ? "contents" : "none" }}>
+            <Files />
+          </div>
+        )}
+        {sidebarView !== "files" && (
+           <>
             {sidebarView === "network" ? (
               <NearbyPanel
                 users={snapshot.online_users ?? []}

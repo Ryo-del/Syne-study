@@ -8,26 +8,24 @@ import { filesApi } from "../../files/api";
 import { describeFileError } from "../../files/errors";
 import { formatBytes } from "../../files/format";
 import { iconUrl } from "../../files/icons";
-import type { FileAction, FileCap, FileEntry, QuotaInfo } from "../../files/types";
+import { canDo } from "../../files/perm";
+import type { FileEntry, QuotaInfo } from "../../files/types";
 import { SECTION_TITLES, type SectionId } from "../../files/uiState";
 import { apiOwner, useSectionTree, type Row } from "../../files/useSectionTree";
+import { useFilesCtx } from "./FilesContext";
+import { useSectionActions } from "./useSectionActions";
 
-export interface Selection {
-  section: SectionId | null;
-  keys: string[];
-  anchor: string | null;
-}
-
-export const NO_SELECTION: Selection = { section: null, keys: [], anchor: null };
+import { NO_SELECTION, type Selection } from "../../files/selection";
 
 interface Props {
   id: SectionId;
+  paneId: string | null;
   collapsed: boolean;
   dragging: boolean;
   dropMark: "before" | "after" | null;
   selection: Selection;
   onSelection: (s: Selection) => void;
-  notify: (msg: string) => void;
+notify: (msg: string, kind?: "info" | "error") => void;
   refreshSignal: number;
   registerEl: (id: SectionId, el: HTMLElement | null) => void;
   onHeaderPointerDown: (e: ReactPointerEvent, id: SectionId) => void;
@@ -41,17 +39,7 @@ const EMPTY_TEXT: Record<SectionId, string> = {
   server: "Нет доступных папок",
 };
 
-/** Проверка только для вида интерфейса; настоящие права проверяет сервер. */
-function can(kind: SectionId, e: FileEntry, cap: FileAction | FileCap): boolean {
-  const v = e.can?.[cap];
-  return kind === "mine" ? v !== false : v === true;
-}
 
-function dropNested(list: FileEntry[]): FileEntry[] {
-  return list.filter(
-    (a) => !list.some((b) => b !== a && b.is_dir && b.owner === a.owner && a.path.startsWith(`${b.path}/`)),
-  );
-}
 
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -148,6 +136,7 @@ function QuotaBar({ generation }: { generation: number }) {
 
 export function Section({
   id,
+  paneId,
   collapsed,
   dragging,
   dropMark,
@@ -161,6 +150,7 @@ export function Section({
   onToggleCollapsed,
 }: Props) {
   const tree = useSectionTree(id);
+    const ctx = useFilesCtx();
   const [editing, setEditing] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const { rows } = tree;
@@ -169,7 +159,29 @@ export function Section({
     () => new Set(selection.section === id ? selection.keys : []),
     [selection, id],
   );
+    const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.key)), [rows, selected]);
+  const rootEntry = useMemo<FileEntry>(
+    () => ({ name: "Моя папка", path: "", is_dir: true, size: 0, mod_time: 0, owner: "", owner_name: "" }),
+    [],
+  );
+  const actions = useSectionActions({
+    id,
+    tree,
+    selectedRows,
+    selectedKeys: selected,
+    select,
+    clear: () => onSelection(NO_SELECTION),
+    setEditing,
+    startRename,
+    notify,
+    rootEntry,
+    paneId,
+  });
 
+  useEffect(() => {
+    if (id === "favorites" && ctx.favVersion > 0) void tree.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.favVersion]);
   useEffect(() => {
     if (refreshSignal > 0) void tree.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,7 +217,7 @@ export function Section({
       return;
     }
     select([row.key], row.key);
-    if (row.entry.is_dir) void toggleRow(row.entry);
+    if (row.entry.is_dir && e.detail <= 1) void toggleRow(row.entry);
   }
 
   async function commitRename(entry: FileEntry, name: string) {
@@ -227,9 +239,24 @@ export function Section({
     }
     void tree.reload();
   }
-
-  async function deleteSelected() {
-    const picked = rows.filter((r) => selected.has(r.key));
+    function startRename(row: Row) {
+    if ((id === "server" && row.depth === 0) || !canDo(ctx.me, id, row.entry, "rename")) {
+      notify("Нет права на переименование");
+      return;
+    }
+    setEditing(row.key);
+  }
+    function openRow(row: Row) {
+    const e = row.entry;
+    if (e.is_dir || !e.name.toLowerCase().endsWith(".txt")) return; // открыть можно только .txt
+    if (!canDo(ctx.me, id, e, "open")) {
+      notify("Нет права на просмотр");
+      return;
+    }
+    ctx.openFile(e, id, canDo(ctx.me, id, e, "edit"));
+  }
+     async function deleteSelected() {
+    const picked = selectedRows;
     if (picked.length === 0) return;
 
     if (id === "favorites") {
@@ -244,24 +271,11 @@ export function Section({
       if (failed) notify(describeFileError(failed.reason));
       onSelection(NO_SELECTION);
       void tree.reload();
+      ctx.refreshFavs();
       return;
     }
 
-    const candidates = picked
-      .filter((r) => !(id === "server" && r.depth === 0) && can(id, r.entry, "delete"))
-      .map((r) => r.entry);
-    if (candidates.length === 0) {
-      notify("Нет права на удаление");
-      return;
-    }
-    const res = await Promise.allSettled(
-      dropNested(candidates).map((e) => filesApi.remove(apiOwner(id, e), e.path)),
-    );
-    const failed = res.find((r): r is PromiseRejectedResult => r.status === "rejected");
-    if (failed) notify(describeFileError(failed.reason));
-    else if (candidates.length < picked.length) notify("Часть элементов не удалена: нет права");
-    onSelection(NO_SELECTION);
-    void tree.reload();
+    await actions.removeReal(picked);
   }
 
   function moveCursor(delta: number) {
@@ -302,19 +316,13 @@ export function Section({
           void toggleRow(cur.entry);
         }
         break;
-      case "Enter":
+            case "Enter":
         if (cur?.entry.is_dir) {
           e.preventDefault();
           void toggleRow(cur.entry);
-        }
-        break;
-      case "F2":
-        e.preventDefault();
-        if (!cur) break;
-        if ((id === "server" && cur.depth === 0) || !can(id, cur.entry, "rename")) {
-          notify("Нет права на переименование");
-        } else {
-          setEditing(cur.key);
+        } else if (cur) {
+          e.preventDefault();
+          openRow(cur);
         }
         break;
       case "Delete":
@@ -358,6 +366,7 @@ export function Section({
             tabIndex={0}
             role="tree"
             onKeyDown={onKeyDown}
+            onContextMenu={actions.bodyMenu}
             onClick={(e) => {
               if (e.target === e.currentTarget) onSelection(NO_SELECTION);
             }}
@@ -383,6 +392,8 @@ export function Section({
                   aria-expanded={row.entry.is_dir ? row.expanded : undefined}
                   className={`fx-row${selected.has(row.key) ? " sel" : ""}`}
                   style={{ paddingLeft: 6 + row.depth * 14 }}
+                  onContextMenu={(e) => actions.rowMenu(e, row)}
+                  onDoubleClick={() => openRow(row)}
                   onClick={(e) => handleRowClick(e, row, index)}
                 >
                   <span

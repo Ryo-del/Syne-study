@@ -342,3 +342,378 @@
   margin: 4px 6px;
   background: var(--line);
 }
+.fx-notice.info {
+  background: var(--accent-dim);
+}
+
+.fx-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+.fx-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(92vw, 780px);
+  max-height: 88vh;
+  padding: 20px;
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  overflow: auto;
+}
+.fx-modal-small {
+  width: min(92vw, 440px);
+}
+.fx-modal-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.fx-modal-text {
+  font-size: 0.86rem;
+  color: var(--ink-secondary);
+}
+.fx-modal-error {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--danger-dim);
+  font-size: 0.84rem;
+}
+.fx-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fx-modal-count {
+  margin-right: auto;
+  font-size: 0.82rem;
+  color: var(--ink-secondary);
+}
+.fx-btn {
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.84rem;
+}
+.fx-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.fx-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fx-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+.fx-btn.danger {
+  background: var(--danger);
+  border-color: transparent;
+  color: #fff;
+}
+.fx-input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  user-select: text;
+}
+.fx-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.fx-perm {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+.fx-perm th {
+  padding: 4px 6px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-muted);
+  text-align: center;
+  vertical-align: bottom;
+}
+.fx-perm td {
+  padding: 8px 6px;
+  border-top: 1px solid var(--line);
+}
+.fx-perm-name {
+  min-width: 190px;
+  color: var(--ink);
+}
+.fx-perm-sub {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+  font-size: 0.74rem;
+  color: var(--ink-muted);
+}
+.fx-perm-cell {
+  text-align: center;
+}
+.fx-perm-cell input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.fx-picker-list {
+  min-height: 160px;
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.fx-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.fx-picker-row:hover {
+  background: var(--surface);
+}
+.fx-picker-row input {
+  accent-color: var(--accent);
+}
+.fx-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-picker-login {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+.fx-workspace {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  position: relative;
+  background: var(--bg-tertiary);
+}
+.fx-workspace.drop-new {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.fx-workspace-hint {
+  margin: auto;
+  max-width: 320px;
+  padding: 16px;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--ink-muted);
+}
+.fx-sections.drop-all {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.fx-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  min-height: 0;
+  overflow: hidden;
+}
+.fx-pane > .fx-explorer-inner {
+  background: var(--bg-secondary);
+}
+.fx-pane-splitter {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--line);
+  z-index: 4;
+}
+.fx-pane-splitter:hover,
+.fx-root.resizing .fx-pane-splitter {
+  background: var(--accent-dim);
+}
+.fx-pane.drop-before::before,
+.fx-pane.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  z-index: 6;
+}
+.fx-pane.drop-before::before {
+  left: 0;
+}
+.fx-pane.drop-after::after {
+  right: 0;
+}
+
+.fx-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-tertiary);
+}
+.fx-tabs {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 34px;
+  padding-right: 4px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--line);
+}
+.fx-tabs-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+.fx-tabs-list::-webkit-scrollbar {
+  height: 0;
+}
+.fx-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border-right: 1px solid var(--line);
+  color: var(--ink-secondary);
+  font-size: 0.84rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.fx-tab:hover {
+  background: var(--surface);
+}
+.fx-tab.active {
+  background: var(--bg-tertiary);
+  color: var(--ink);
+}
+.fx-editor.focused .fx-tab.active {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.fx-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fx-tab-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: inherit;
+}
+.fx-tab-close:hover {
+  background: var(--surface-active);
+}
+.fx-tab-close .fx-x {
+  opacity: 0;
+  line-height: 1;
+}
+.fx-tab:hover .fx-x,
+.fx-tab.active .fx-x {
+  opacity: 1;
+}
+.fx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-secondary);
+}
+.fx-tab-close.dirty .fx-x {
+  display: none;
+}
+.fx-tab-close.dirty:hover .fx-x {
+  display: inline;
+}
+.fx-tab-close.dirty:hover .fx-dot {
+  display: none;
+}
+
+.fx-banner {
+  flex: none;
+  padding: 6px 12px;
+  background: var(--orange-dim);
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+.fx-monaco {
+  flex: 1;
+  min-height: 0;
+  user-select: text;
+}
+.fx-editor-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+}
+
+.fx-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  z-index: 2300;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 520px);
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow);
+  font-size: 0.86rem;
+  color: var(--ink);
+}
+.fx-toast.error {
+  background: var(--danger-dim);
+}
+.fx-toast.info {
+  background: var(--accent-dim);
+}
+
+.fx-ghost {
+  position: fixed;
+  z-index: 2400;
+  pointer-events: none;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+}

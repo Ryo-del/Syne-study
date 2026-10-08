@@ -1,4 +1,5 @@
 import { authHeaders, getApiBase, whenApiReady } from "./api";
+import { setSessionLogin } from "./session";
 
 export class AuthApiError extends Error {
   reason: string;
@@ -38,17 +39,21 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export function login(loginId: string, password: string) {
-  return postJson<{ ok: boolean }>("/api/auth/login", {
+export async function login(loginId: string, password: string) {
+  const r = await postJson<{ ok: boolean }>("/api/auth/login", {
     login: loginId,
     password,
   });
+  if (r.ok) setSessionLogin(loginId);
+  return r;
 }
 
-export function claimAccount(loginId: string, claimCode: string, password: string) {
-  return postJson<{ ok: boolean }>("/api/auth/claim", {
+export async function claimAccount(loginId: string, claimCode: string, password: string) {
+  const r = await postJson<{ ok: boolean }>("/api/auth/claim", {
     login: loginId,
     claim_code: claimCode,
     password,
   });
+  if (r.ok) setSessionLogin(loginId);
+  return r;
 }
