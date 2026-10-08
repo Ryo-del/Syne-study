@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -26,18 +27,20 @@ type server struct {
 
 func main() {
 	var (
-		addr       string
-		localID    string
-		port       int
-		workdir    string
-		serverAddr string
+		exitOnStdinClose bool
+		addr             string
+		localID          string
+		port             int
+		workdir          string
+		serverAddr       string
 	)
 	flag.StringVar(&addr, "addr", "127.0.0.1:38673", "HTTP listen address")
 	flag.StringVar(&localID, "id", "", "Local peer ID")
 	flag.IntVar(&port, "port", 3000, "Preferred local TCP port")
 	flag.StringVar(&workdir, "workdir", "", "Working directory for local data files")
 	flag.StringVar(&serverAddr, "server-addr", "", "Study Server libp2p multiaddr")
-
+	flag.BoolVar(&exitOnStdinClose, "exit-on-stdin-close", false,
+		"exit when stdin is closed (set by the Tauri host: the sidecar must not outlive the app)")
 	flag.Parse()
 	token := os.Getenv("SYNE_API_TOKEN")
 	if token == "" {
@@ -96,7 +99,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
+	if exitOnStdinClose {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			slog.Info("host process is gone, shutting down")
+			stop()
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -142,8 +151,14 @@ func withGuard(token string, next http.Handler) http.Handler {
 			if got == "" && r.URL.Path == "/api/events" {
 				got = r.URL.Query().Get("token")
 			}
+			if got == "" {
+				writeError(w, http.StatusUnauthorized,
+					"unauthorized: no API token in the request (is the page opened inside the Syne window, not a browser?)")
+				return
+			}
 			if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
-				writeError(w, http.StatusUnauthorized, "unauthorized")
+				writeError(w, http.StatusUnauthorized,
+					"unauthorized: wrong API token (an old syne-ui-api process from a previous run is probably still running)")
 				return
 			}
 		}

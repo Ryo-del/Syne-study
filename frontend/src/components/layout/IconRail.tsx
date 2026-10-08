@@ -1,6 +1,7 @@
 import EmojiPicker from "../common/EmojiPicker";
 
 import type { SidebarView } from "../../config/settings";
+import { FilesIcon } from "../files/FilesIcon";
 
 interface IconRailProps {
   sidebarView: SidebarView;
@@ -187,7 +188,15 @@ export default function IconRail({
           <path d="M4.929 4.929 19.07 19.071" />
         </svg>
       </button>
-
+              <button
+        type="button"
+        className={`icon-rail-btn ${sidebarView === "files" ? "active" : ""}`}
+        title="Files"
+        aria-label="Files"
+        onClick={() => onSidebarViewChange("files")}
+      >
+        <FilesIcon size={22} />
+      </button>
       <div className="icon-rail-spacer" />
         <button
         type="button"

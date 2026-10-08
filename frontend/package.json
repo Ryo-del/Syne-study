@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "icons": "node ./scripts/build-file-icons.mjs",
+    "predev": "npm run icons",
+    "prebuild:web": "npm run icons",
     "build": "npm run build:web && npm run build:sidecar",
     "build:web": "tsc && vite build",
     "build:sidecar": "node ./scripts/build-sidecar.mjs",
@@ -13,8 +16,10 @@
     "tauri:build": "node ./scripts/run-tauri-build.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/plugin-dialog": "2.7.3",
     "@tauri-apps/plugin-notification": "^2.4.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -24,6 +29,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "material-icon-theme": "^5.39.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }

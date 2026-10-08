@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -282,6 +282,7 @@ fn spawn_backend(app: &AppHandle, token: &str) -> Result<CommandChild, String> {
         API_ADDR.to_string(),
         "--workdir".to_string(),
         workdir_str,
+        "--exit-on-stdin-close".to_string(),
     ];
 
     if let Some(server_addr) = resolve_server_addr(app) {
@@ -301,6 +302,12 @@ fn spawn_backend(app: &AppHandle, token: &str) -> Result<CommandChild, String> {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
+                CommandEvent::Stdout(line) => {
+                    println!("[sidecar] {}", String::from_utf8_lossy(&line).trim_end())
+                }
+                CommandEvent::Stderr(line) => {
+                    eprintln!("[sidecar] {}", String::from_utf8_lossy(&line).trim_end())
+                }
                 CommandEvent::Error(err) => eprintln!("syne-ui-api sidecar error: {err}"),
                 CommandEvent::Terminated(payload) => {
                     eprintln!("syne-ui-api sidecar terminated: {:?}", payload.code)
@@ -312,7 +319,7 @@ fn spawn_backend(app: &AppHandle, token: &str) -> Result<CommandChild, String> {
     Ok(child)
 }
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -340,6 +347,15 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            // sidecar не должен пережить приложение: его токен действует один запуск
+            if let Some(child) = app_handle.state::<BackendState>().child.lock().unwrap().take() {
+                let _ = child.kill();
+            }
+        }
+    });
 }

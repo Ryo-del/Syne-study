@@ -22,7 +22,8 @@ export type SidebarView =
   | "chats"
   | "contacts"
   | "network"
-  | "blocked";
+  | "blocked"
+  | "files";
 
 export type ThemePreference =
   | "system"

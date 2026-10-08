@@ -91,7 +91,8 @@ import ErrorToast from "./components/common/ErrorToast";
 import ContextMenus from "./components/common/ContextMenus";
 import AuthGate from "./components/auth/AuthGate";
 import NearbyPanel from "./components/nearby/NearbyPanel";
-
+import { Files } from "./components/files/Files";
+import "./fonts";
 const EMPTY_SNAPSHOT: Snapshot = {
   local_id: "",
   port: 0,
@@ -1016,7 +1017,11 @@ async function handleOpenContact(contact: Contact) {
 useEffect(() => {
   if (!authenticated) return;
   const onUnload = () => {
-    void fetch(new URL("/api/auth/logout", getApiBase()).toString(), { method: "POST", keepalive: true });
+    void fetch(new URL("/api/auth/logout", getApiBase()).toString(), {
+      method: "POST",
+      keepalive: true,
+      headers: authHeaders(),
+    });
   };
   window.addEventListener("beforeunload", onUnload);
   return () => window.removeEventListener("beforeunload", onUnload);
@@ -1226,7 +1231,7 @@ const previousChatIdRef = useRef<string>("");
 
   return (
     <>
-      <div className="app-shell">
+      <div className={`app-shell${sidebarView === "files" ? " files-mode" : ""}`}>
         <IconRail
           sidebarView={sidebarView}
           showSettings={showSettings}
@@ -1249,143 +1254,108 @@ const previousChatIdRef = useRef<string>("");
           }}
         />
 
-                {sidebarView === "network" ? (
-          <NearbyPanel
-            users={snapshot.online_users ?? []}
-            query={nearbyQuery}
-            onQueryChange={setNearbyQuery}
-            getPeerAvatar={getPeerAvatar}
-            onSetPeerEmoji={setPeerEmoji}
-            onOpenPeer={(peerId, peerAddr, name) => {
-              void handleOpenPeer(peerId, peerAddr, name);
-            }}
-          />
+                               {sidebarView === "files" ? (
+          <Files />
         ) : (
-          <PeersPanel
-            sidebarView={sidebarView}
-            sidebarTitle={sidebarTitle}
-            sidebarBadge={sidebarBadge}
-            searchPlaceholder={
-              searchPlaceholder
-            }
-            query={query}
-            onQueryChange={setQuery}
-            filteredChats={filteredChats}
-            filteredNearbyPeers={
-              filteredNearbyPeers
-            }
-            filteredOnlineUsers={
-              filteredOnlineUsers
-            }
-            filteredContacts={
-              filteredContacts
-            }
-            filteredBlockedPeers={
-              filteredBlockedPeers
-            }
-            selectedChatId={
-              selectedChatId
-            }
-            onSelectChat={(chatId) => {
-              setChatContextMenu(null);
-              setSelectedChatId(chatId);
-            }}
-            onOpenPeer={(
-              peerId,
-              peerAddr,
-              name,
-            ) => {
-              void handleOpenPeer(
-                peerId,
-                peerAddr,
-                name,
-              );
-            }}
-            
-            onChatContextMenu={
-              handleChatContextMenu
-            }
-            onContactContextMenu={
-              handleContactContextMenu
-            }
-            getPeerAvatar={
-              getPeerAvatar
-            }
-            onUnblock={(peerId) => {
-  void handleUnblock(peerId);
-}}
-onNewContact={() => setShowNewContactPopover(true)}
-onOpenContact={(contact) => {
-  setContactContextMenu(null);
-  void handleOpenContact(contact);
-}}
-          />
-        )}
+          <>
+            {sidebarView === "network" ? (
+              <NearbyPanel
+                users={snapshot.online_users ?? []}
+                query={nearbyQuery}
+                onQueryChange={setNearbyQuery}
+                getPeerAvatar={getPeerAvatar}
+                onSetPeerEmoji={setPeerEmoji}
+                onOpenPeer={(peerId, peerAddr, name) => {
+                  void handleOpenPeer(
+                    peerId,
+                    peerAddr,
+                    name,
+                  );
+                }}
+              />
+            ) : (
+              <PeersPanel
+                sidebarView={sidebarView}
+                sidebarTitle={sidebarTitle}
+                sidebarBadge={sidebarBadge}
+                searchPlaceholder={searchPlaceholder}
+                query={query}
+                onQueryChange={setQuery}
+                filteredChats={filteredChats}
+                filteredNearbyPeers={filteredNearbyPeers}
+                filteredOnlineUsers={filteredOnlineUsers}
+                filteredContacts={filteredContacts}
+                filteredBlockedPeers={filteredBlockedPeers}
+                selectedChatId={selectedChatId}
+                onSelectChat={(chatId) => {
+                  setChatContextMenu(null);
+                  setSelectedChatId(chatId);
+                }}
+                onOpenPeer={(
+                  peerId,
+                  peerAddr,
+                  name,
+                ) => {
+                  void handleOpenPeer(
+                    peerId,
+                    peerAddr,
+                    name,
+                  );
+                }}
+                onChatContextMenu={handleChatContextMenu}
+                onContactContextMenu={handleContactContextMenu}
+                getPeerAvatar={getPeerAvatar}
+                onUnblock={(peerId) => {
+                  void handleUnblock(peerId);
+                }}
+                onNewContact={() =>
+                  setShowNewContactPopover(true)
+                }
+                onOpenContact={(contact) => {
+                  setContactContextMenu(null);
+                  void handleOpenContact(contact);
+                }}
+              />
+            )}
 
-        <ChatArea
-          selectedChat={selectedChat}
-          selectedContact={
-            selectedContact
-          }
-          selectedPeerEmoji={
-            selectedPeerEmoji
-          }
-          selectedAddr={selectedAddr}
-          selectedMessages={
-            selectedMessages
-          }
-          loading={loading}
-          apiBase={getApiBase()}
-          showDetailPanel={
-            showDetailPanel
-          }
-          setShowDetailPanel={
-            setShowDetailPanel
-          }
-          emojiPickerTarget={
-            emojiPickerTarget
-          }
-          editingPeerName={
-            editingPeerName
-          }
-          peerNameDraft={
-            peerNameDraft
-          }
-          blockReason={blockReason}
-          saving={saving}
-          composer={composer}
-          messageStreamRef={
-            messageStreamRef
-          }
-          onAddContact={() => { void handleQuickAddContact(); }}
-          onComposerChange={
-            setComposer
-          }
-          onSend={() => {
-            void handleSend();
-          }}
-          onEmojiTargetChange={
-            setEmojiPickerTarget
-          }
-          onPeerEmojiChange={
-            updatePeerEmoji
-          }
-          onPeerNameEditing={
-            setEditingPeerName
-          }
-          onPeerNameDraftChange={
-            setPeerNameDraft
-          }
-          onCommitPeerName={() => {
-            void handleCommitPeerName();
-          }}
-          onBlockReasonChange={
-            setBlockReason
-          }
-          onBlock={() => {
-            void handleBlock();
-          }}
-        />
+            <ChatArea
+              selectedChat={selectedChat}
+              selectedContact={selectedContact}
+              selectedPeerEmoji={selectedPeerEmoji}
+              selectedAddr={selectedAddr}
+              selectedMessages={selectedMessages}
+              loading={loading}
+              apiBase={getApiBase()}
+              showDetailPanel={showDetailPanel}
+              setShowDetailPanel={setShowDetailPanel}
+              emojiPickerTarget={emojiPickerTarget}
+              editingPeerName={editingPeerName}
+              peerNameDraft={peerNameDraft}
+              blockReason={blockReason}
+              saving={saving}
+              composer={composer}
+              messageStreamRef={messageStreamRef}
+              onAddContact={() => {
+                void handleQuickAddContact();
+              }}
+              onComposerChange={setComposer}
+              onSend={() => {
+                void handleSend();
+              }}
+              onEmojiTargetChange={setEmojiPickerTarget}
+              onPeerEmojiChange={updatePeerEmoji}
+              onPeerNameEditing={setEditingPeerName}
+              onPeerNameDraftChange={setPeerNameDraft}
+              onCommitPeerName={() => {
+                void handleCommitPeerName();
+              }}
+              onBlockReasonChange={setBlockReason}
+              onBlock={() => {
+                void handleBlock();
+              }}
+            />
+          </>
+        )}
       </div>
 
       {showSettings ? (

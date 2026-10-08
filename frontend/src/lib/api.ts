@@ -35,14 +35,21 @@ export class ApiError extends Error {
 // Токен локального API. Его создаёт Tauri при запуске; в браузере без Tauri
 // (npm run dev) защита выключена, и токен пустой.
 let apiToken = "";
+let tokenError = "";
 const ready: Promise<void> = (async () => {
   if (!isTauri()) {
     return;
   }
-  try {
-    apiToken = await invoke<string>("backend_token");
-  } catch (err) {
-    console.error("Failed to get the local API token:", err);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      apiToken = await invoke<string>("backend_token");
+      tokenError = "";
+      return;
+    } catch (err) {
+      tokenError = String(err);
+      console.error("Failed to get the local API token:", err);
+      await delay(200 * (attempt + 1));
+    }
   }
 })();
 

@@ -1,4 +1,4 @@
-import { getApiBase } from "./api";
+import { authHeaders, getApiBase, whenApiReady } from "./api";
 
 export class AuthApiError extends Error {
   reason: string;
@@ -13,19 +13,26 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   let response: Response;
 
   try {
+    await whenApiReady();
+
     response = await fetch(`${getApiBase()}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
       body: JSON.stringify(body),
     });
   } catch {
     throw new AuthApiError("network_error");
   }
 
-  const data = await response.json().catch(() => ({}) as Record<string, unknown>);
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new AuthApiError(typeof data.error === "string" ? data.error : "unknown_error");
+    throw new AuthApiError(
+      typeof data.error === "string" ? data.error : "unknown_error",
+    );
   }
 
   return data as T;

@@ -1,0 +1,344 @@
+.app-shell.files-mode {
+  grid-template-columns: 62px minmax(0, 1fr);
+}
+@media (max-width: 960px) {
+  .app-shell.files-mode {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+}
+
+.fx-root {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  user-select: none;
+}
+.fx-root.resizing {
+  cursor: col-resize;
+}
+.fx-loading {
+  margin: auto;
+  color: var(--ink-muted);
+}
+
+.fx-explorer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--line);
+}
+.fx-explorer.full {
+  flex: 1 1 auto;
+  border-right: 0;
+}
+.fx-explorer.sized {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.fx-explorer-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.fx-splitter {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.fx-explorer.full .fx-splitter {
+  right: 0;
+}
+.fx-splitter:hover,
+.fx-root.resizing .fx-splitter {
+  background: var(--accent-dim);
+}
+.fx-empty-space {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  flex: none;
+}
+.fx-head-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.fx-head-actions {
+  display: flex;
+  gap: 2px;
+}
+.fx-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+}
+.fx-icon-btn:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.fx-sections {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fx-sec {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+}
+.fx-sec.open {
+  flex: 1 1 0;
+}
+.fx-sec.closed {
+  flex: 0 0 auto;
+}
+.fx-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  flex: none;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+.fx-sec-head:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+.fx-sec.dragging .fx-sec-head {
+  opacity: 0.5;
+}
+.fx-sec.drop-before::before,
+.fx-sec.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  z-index: 3;
+}
+.fx-sec.drop-before::before {
+  top: -1px;
+}
+.fx-sec.drop-after::after {
+  bottom: -1px;
+}
+.fx-chev-svg {
+  flex: none;
+  transition: transform 100ms ease;
+}
+.fx-chev-svg.open {
+  transform: rotate(90deg);
+}
+
+.fx-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 6px;
+  outline: none;
+}
+.fx-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.fx-body::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 10px;
+}
+.fx-hint {
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.fx-link {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fx-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding-right: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+.fx-row:hover {
+  background: var(--surface);
+}
+.fx-row.sel {
+  background: var(--surface-active);
+}
+.fx-body:focus .fx-row.sel {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.fx-chev {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ink-muted);
+}
+.fx-chev.none {
+  visibility: hidden;
+}
+.fx-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.fx-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fx-rename {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  user-select: text;
+}
+.fx-spin {
+  width: 10px;
+  height: 10px;
+  margin-left: auto;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: fx-rot 700ms linear infinite;
+}
+@keyframes fx-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.fx-quota {
+  flex: none;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.75rem;
+  color: var(--ink-secondary);
+}
+.fx-quota-bar {
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  overflow: hidden;
+}
+.fx-quota-fill {
+  height: 100%;
+  background: var(--accent);
+}
+.fx-quota-fill.warn {
+  background: var(--orange);
+}
+.fx-quota-fill.danger {
+  background: var(--danger);
+}
+
+.fx-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px;
+  padding: 8px 10px;
+  flex: none;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-strong);
+  background: var(--danger-dim);
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.fx-menu {
+  position: fixed;
+  z-index: 2100;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+.fx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-align: left;
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+.fx-menu-item:hover:not(:disabled) {
+  background: var(--surface);
+}
+.fx-menu-item:disabled {
+  color: var(--ink-muted);
+  cursor: default;
+}
+.fx-menu-check {
+  width: 14px;
+  color: var(--accent);
+}
+.fx-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
