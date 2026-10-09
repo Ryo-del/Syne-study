@@ -1,3 +1,4 @@
+import { attachmentPreview } from "../../files/attachment";
 import {
   formatTime,
   joinAddress,
@@ -179,7 +180,7 @@ export default function PeersPanel({
 
                     <div className="peer-card-info-bottom">
                       <span>
-                        {chat.preview ||
+                        {attachmentPreview(chat.preview) ||
                           (chat.online
                             ? "Encrypted Stream"
                             : "Last seen: recently")}

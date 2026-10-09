@@ -1819,3 +1819,165 @@ button {
   text-align: center;
   opacity: 0.6;
 }
+/* ─── Вложения в чате ─── */
+
+.attach-anchor {
+  position: relative;
+  flex: none;
+}
+.attach-btn {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ink-secondary);
+}
+.attach-btn:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--ink);
+}
+.attach-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.attach-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  min-width: 230px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+.attach-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  text-align: left;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+.attach-item:hover {
+  background: var(--surface);
+}
+
+.upload-strip {
+  padding: 6px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-secondary);
+  font-size: 0.8rem;
+  color: var(--ink-secondary);
+}
+.main-chat.drop-active {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.msg-bubble.has-attachment {
+  padding: 8px 10px 8px;
+}
+.msg-bubble.media {
+  padding: 4px 4px 8px;
+}
+.msg-bubble.media .msg-meta {
+  padding: 0 8px;
+}
+.chat-photo {
+  display: block;
+  max-width: min(100%, 360px);
+  max-height: 360px;
+  border-radius: 14px;
+  object-fit: contain;
+  background: rgba(127, 127, 127, 0.15);
+  cursor: zoom-in;
+}
+.chat-photo-skeleton {
+  width: 240px;
+  height: 180px;
+  border-radius: 14px;
+  background: rgba(127, 127, 127, 0.18);
+}
+
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 230px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(127, 127, 127, 0.14);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.file-card:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.msg-bubble.outgoing .file-card {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.file-card-icon {
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+.file-card-main {
+  flex: 1;
+  min-width: 0;
+}
+.file-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.file-card-meta {
+  margin-top: 1px;
+  font-size: 0.76rem;
+  opacity: 0.8;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.88);
+}
+.lightbox img {
+  max-width: 92vw;
+  max-height: 84vh;
+  border-radius: 8px;
+  object-fit: contain;
+}
+.lightbox-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(30, 30, 30, 0.9);
+  color: #fff;
+  max-width: 90vw;
+}
+.lightbox-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+}

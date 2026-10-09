@@ -9,6 +9,7 @@ import { apiOwner, entryKey, type Row, type useSectionTree } from "../../files/u
 import { ApiError } from "../../lib/api";
 import { useFilesCtx } from "./FilesContext";
 import type { MenuItem } from "./FilesMenu";
+import { pasteAll } from "../../files/paste";
 
 export interface ActionDeps {
   id: SectionId;
@@ -88,52 +89,20 @@ export function useSectionActions(d: ActionDeps) {
     );
   }
 
-  async function pasteInto(dest: FileEntry | null) {
-    const items = ctx.clipboard;
-    if (items.length === 0) return;
-    const destOwner = dest ? apiOwner(id, dest) : "";
-    const destPath = dest?.path ?? "";
-
-    const loop = items.find(
-      (i) => i.is_dir && i.owner === destOwner && (destPath === i.path || destPath.startsWith(`${i.path}/`)),
+    async function pasteInto(dest: FileEntry | null) {
+    if (ctx.clipboard.length === 0) return;
+    const r = await pasteAll(
+      ctx.clipboard,
+      { owner: dest ? apiOwner(id, dest) : "", path: dest?.path ?? "" },
+      ctx.askConflict,
+      notify,
     );
-    if (loop) {
-      notify("Нельзя вставить папку в саму себя");
-      return;
-    }
-
-    let policy: Parameters<typeof filesApi.paste>[2];
-    let last: FileEntry | undefined;
-    let skipped = 0;
-
-    for (const it of items) {
-      const attempt = () =>
-        filesApi.paste({ owner: it.owner, path: it.path }, { owner: destOwner, path: destPath }, policy);
-      try {
-        let r: Awaited<ReturnType<typeof attempt>>;
-        try {
-          r = await attempt();
-        } catch (err) {
-          if (!(err instanceof ApiError && err.code === "exists") || policy) throw err;
-          const p = await ctx.askConflict(it.name);
-          if (!p) break; // отмена
-          policy = p;
-          r = await attempt();
-        }
-        skipped += r.skipped;
-        if (r.entry) last = r.entry;
-      } catch (err) {
-        notify(describeFileError(err));
-        break;
-      }
-    }
-
     await refreshAfter(dest);
-    if (last) {
-      const key = entryKey(last);
+    if (r.last) {
+      const key = entryKey(r.last);
       d.select([key], key);
     }
-    if (skipped > 0) notify(`Пропущено элементов: ${skipped}`, "info");
+    if (r.skipped > 0) notify(`Пропущено элементов: ${r.skipped}`, "info");
   }
 
   async function duplicate(entries: FileEntry[]) {
@@ -290,7 +259,7 @@ export function useSectionActions(d: ActionDeps) {
         {
           label: "Отправить",
           disabled: !(single && !t.is_dir && can(t, "send")),
-          onClick: () => notify("Отправка в чат появится на этапе 7", "info"),
+           onClick: () => ctx.openSend(t, id),
         },
         { separator: true },
       );

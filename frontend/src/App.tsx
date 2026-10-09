@@ -92,6 +92,8 @@ import ContextMenus from "./components/common/ContextMenus";
 import AuthGate from "./components/auth/AuthGate";
 import NearbyPanel from "./components/nearby/NearbyPanel";
 import { Files } from "./components/files/Files";
+import { attachmentPreview } from "./files/attachment";
+import { clearImageCache } from "./files/blob";
 import "./fonts";
 const EMPTY_SNAPSHOT: Snapshot = {
   local_id: "",
@@ -539,7 +541,7 @@ useEffect(() => {
               // notifyNewMessage сам молчит, если окно в фокусе
               void notifyNewMessage({
                 title: event.chat?.title || "Syne",
-                body: msg.text,
+                body: attachmentPreview(msg.text),
                 enabled: notificationsEnabledRef.current,
                 preview: notificationPreviewRef.current,
               });
@@ -609,6 +611,12 @@ useEffect(() => {
           if (event.error) {
             setError(event.error);
             setErrorToastKey((key) => key + 1);
+          }
+          break;
+        }
+        case "file_transfer": {
+          if (event.transfer) {
+            window.dispatchEvent(new CustomEvent("syne:file-transfer", { detail: event.transfer }));
           }
           break;
         }
@@ -1007,6 +1015,7 @@ async function handleOpenContact(contact: Contact) {
   async function handleLogout() {
   try { await logout(); } catch (err) { setError(describeError(err, "Failed to log out")); }
   startTransition(() => {
+    clearImageCache();
     setAuthenticated(false);
     setSnapshot(EMPTY_SNAPSHOT);
     setMessages({});
@@ -1361,6 +1370,10 @@ const previousChatIdRef = useRef<string>("");
               onBlockReasonChange={setBlockReason}
               onBlock={() => {
                 void handleBlock();
+              }}
+              onNotify={(msg) => {
+                setError(msg);
+                setErrorToastKey((key) => key + 1);
               }}
             />
           </>

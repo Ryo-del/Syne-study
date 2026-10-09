@@ -19,7 +19,25 @@ export interface ChoiceButton {
   label: string;
   kind?: "primary" | "danger";
 }
+export interface DropHover {
+  section: SectionId;
+  /** Ключ строки-папки или "root" (корень «Моей папки»). */
+  key: string;
+  entry: FileEntry;
+  /** Как ждёт API. */
+  owner: string;
+  path: string;
+  /** Есть ли право «вставлять». */
+  ok: boolean;
+}
 
+export type DropResolver = (index: number) => DropHover | null;
+
+export interface RevealRequest {
+  section: SectionId;
+  entry: FileEntry;
+  nonce: number;
+}
 export interface ChoiceRequest {
   title: string;
   text: string;
@@ -58,6 +76,11 @@ export interface FilesCtxValue {
   dragStart: (e: ReactPointerEvent, id: SectionId) => void;
   wasDragging: () => boolean;
   dragState: DragState | null;
+  dropHover: DropHover | null;
+  registerResolver: (id: SectionId, fn: DropResolver | null) => void;
+  itemDragStart: (e: ReactPointerEvent, kind: SectionId, entries: FileEntry[]) => void;
+  openSend: (entry: FileEntry, kind: SectionId) => void;
+  reveal: RevealRequest | null;
   registerSectionEl: (id: SectionId, el: HTMLElement | null) => void;
 }
 

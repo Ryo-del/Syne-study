@@ -4,6 +4,7 @@ data/
 
 # macOS
 .DS_Store
+._*
 
 # Frontend / Vite
 frontend/node_modules/

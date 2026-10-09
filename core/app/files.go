@@ -318,6 +318,7 @@ type UploadRequest struct {
 	LocalPaths []string `json:"local_paths"` // файлы и папки с ПК (абсолютные пути)
 	OnConflict string   `json:"on_conflict"` // "" — спросить, rename | replace | skip
 	TransferID string   `json:"transfer_id"`
+	FilesOnly  bool     `json:"files_only"`
 }
 
 type UploadFailure struct {
@@ -326,10 +327,11 @@ type UploadFailure struct {
 }
 
 type UploadResult struct {
-	Uploaded  int             `json:"uploaded"`
-	Skipped   int             `json:"skipped"`
-	Failed    []UploadFailure `json:"failed,omitempty"`
-	Conflicts []string        `json:"conflicts,omitempty"` // имена, которые уже есть; загрузка не начата, ждём выбор
+	Uploaded  int                  `json:"uploaded"`
+	Skipped   int                  `json:"skipped"`
+	Failed    []UploadFailure      `json:"failed,omitempty"`
+	Conflicts []string             `json:"conflicts,omitempty"` // имена, которые уже есть; загрузка не начата, ждём выбор
+	Items     []protocol.FileEntry `json:"items,omitempty"`     // загруженные файлы верхнего уровня (с итоговыми путями)
 }
 
 type uploadItem struct {
@@ -366,6 +368,9 @@ func planUpload(locals []string) ([]uploadItem, int64, error) {
 		if !filepath.IsAbs(lp) {
 			return nil, 0, fmt.Errorf("local path must be absolute: %s", lp)
 		}
+		if isJunkName(filepath.Base(lp)) {
+			continue
+		}
 		info, err := os.Lstat(lp)
 		if err != nil {
 			return nil, 0, err
@@ -393,6 +398,9 @@ func collectDir(local string, group int, rel string, items *[]uploadItem, total 
 		return err
 	}
 	for _, de := range des {
+		if isJunkName(de.Name()) {
+			continue
+		}
 		info, err := de.Info()
 		if err != nil || info.Mode()&os.ModeSymlink != 0 {
 			continue
@@ -428,6 +436,22 @@ func nextFreeName(taken map[string]bool, name string, isDir bool) string {
 	}
 }
 
+// FilesStream отдаёт файл потоком. open вызывается, когда сервер уже разрешил
+// чтение и прислал описание файла: там можно проверить размер и отправить заголовки.
+func (s *Service) FilesStream(ctx context.Context, owner, path string,
+	open func(entry protocol.FileEntry) (io.Writer, error)) error {
+
+	sess, addr, err := s.filesSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, filesLongTimeout)
+	defer cancel()
+	req := protocol.FilesRequest{Op: protocol.FilesOpDownload, SessionID: sess.SessionID, Owner: owner, Path: path}
+	_, err = s.node.FilesDownload(ctx, addr, req, open, nil)
+	return err
+}
+
 // FilesUploadFromDisk загружает файлы и папки с ПК. Если какие-то верхние
 // имена уже есть на сервере, а политика не выбрана, ничего не загружается:
 // возвращаются Conflicts, интерфейс спрашивает пользователя и повторяет
@@ -442,6 +466,15 @@ func (s *Service) FilesUploadFromDisk(ctx context.Context, u UploadRequest) (Upl
 	case "", protocol.ConflictRename, protocol.ConflictReplace, protocol.ConflictSkip:
 	default:
 		return UploadResult{}, errors.New("unknown conflict policy")
+	}
+	if u.FilesOnly {
+		files := make([]string, 0, len(u.LocalPaths))
+		for _, p := range u.LocalPaths {
+			if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() {
+				files = append(files, p)
+			}
+		}
+		u.LocalPaths = files
 	}
 	items, total, err := planUpload(u.LocalPaths)
 	if err != nil {
@@ -576,6 +609,9 @@ func (s *Service) FilesUploadFromDisk(ctx context.Context, u UploadRequest) (Upl
 			res.Skipped++
 		} else {
 			res.Uploaded++
+			if it.top && resp.Entry != nil {
+				res.Items = append(res.Items, *resp.Entry)
+			}
 		}
 		done += size
 	}

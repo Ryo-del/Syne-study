@@ -1,11 +1,14 @@
 package main
 
 import (
-	"errors"
-	"net/http"
-
 	"Syne/core/app"
 	p2ptransport "Syne/core/transport/p2p"
+	"errors"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	protocol "github.com/Ryo-del/Syne-protocol"
 )
@@ -17,6 +20,7 @@ func (s *server) registerFilesRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/download", s.handleFilesDownload)
 	mux.HandleFunc("/api/files/upload", s.handleFilesUpload)
 	mux.HandleFunc("/api/files/cancel", s.handleFilesCancel)
+	mux.HandleFunc("/api/files/blob", s.handleFilesBlob)
 }
 
 func filesStatus(code string) int {
@@ -77,6 +81,65 @@ func (s *server) handleFilesCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// maxBlobBytes — потолок размера файла для предпросмотра в чате.
+const maxBlobBytes = int64(64) << 20
+
+func blobContentType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	}
+	return "application/octet-stream"
+}
+
+// handleFilesBlob отдаёт байты файла (для фото в чате). Права проверяет сервер:
+// нужно право «скачивание», как при обычной загрузке на диск.
+func (s *server) handleFilesBlob(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
+	var req struct {
+		Owner string `json:"owner"`
+		Path  string `json:"path"`
+	}
+	if err := decodeLimited(w, r, &req, 1<<16); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	started := false
+	err := s.service.FilesStream(r.Context(), req.Owner, req.Path, func(e protocol.FileEntry) (io.Writer, error) {
+		if e.IsDir {
+			return nil, &p2ptransport.FilesError{Code: protocol.FilesErrInvalidRequest, Message: "not a file"}
+		}
+		if e.Size > maxBlobBytes {
+			return nil, &p2ptransport.FilesError{Code: protocol.FilesErrInvalidRequest, Message: "file is too large to preview"}
+		}
+		h := w.Header()
+		h.Set("Content-Type", blobContentType(e.Name))
+		h.Set("Content-Length", strconv.FormatInt(e.Size, 10))
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		started = true
+		return w, nil
+	})
+	if err != nil {
+		if !started {
+			writeFilesError(w, err)
+			return
+		}
+		// Обрыв посреди потока: сбрасываем соединение, чтобы клиент не принял неполный файл за целый.
+		panic(http.ErrAbortHandler)
+	}
+}
 func (s *server) handleFilesReadText(w http.ResponseWriter, r *http.Request) {
 	if !requirePost(w, r) {
 		return

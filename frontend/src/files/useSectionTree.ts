@@ -3,6 +3,7 @@ import { filesApi } from "./api";
 import { describeFileError } from "./errors";
 import type { FileEntry } from "./types";
 import type { SectionId } from "./uiState";
+import { isJunkName } from "./hidden";
 
 export interface Row {
   entry: FileEntry;
@@ -22,7 +23,9 @@ export function apiOwner(kind: SectionId, e: FileEntry) {
 }
 
 function sortEntries(list: FileEntry[]): FileEntry[] {
-  return [...list].sort((a, b) =>
+  return list
+    .filter((e) => !isJunkName(e.name))
+    .sort((a, b) =>
     a.is_dir === b.is_dir
       ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
       : a.is_dir
@@ -150,7 +153,34 @@ export function useSectionTree(kind: SectionId) {
     },
     [bump, listFolder],
   );
+    /** Раскрывает цепочку папок до файла. Возвращает ключ строки или текст ошибки. */
+  const reveal = useCallback(
+    async (target: FileEntry): Promise<{ key: string | null; error: string | null }> => {
+      const d = data.current;
+      const parts = target.path.split("/").filter(Boolean);
+      const chain: string[] = kind === "server" ? [""] : []; // в «Сервере» сначала папка владельца
+      for (let i = 1; i < parts.length; i += 1) chain.push(parts.slice(0, i).join("/"));
 
+      // В «Моей папке» владелец один; сравниваем по пути, чтобы не зависеть от формы owner.
+      const findKnown = (p: string): FileEntry | undefined => {
+        if (kind !== "mine") return d.known.get(`${target.owner}\u0000${p}`);
+        for (const v of d.known.values()) if (v.path === p) return v;
+        return undefined;
+      };
+
+      for (const p of chain) {
+        const e = findKnown(p);
+        if (!e) return { key: null, error: null };
+        if (!d.expanded.has(entryKey(e))) {
+          const msg = await toggle(e);
+          if (msg) return { key: null, error: msg };
+        }
+      }
+      const self = findKnown(target.path);
+      return { key: self ? entryKey(self) : null, error: null };
+    },
+    [kind, toggle],
+  );
   const rows = useMemo(() => {
     const d = data.current;
     const out: Row[] = [];
@@ -167,5 +197,5 @@ export function useSectionTree(kind: SectionId) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
-  return { rows, status, error, generation, toggle, reload };
+  return { rows, status, error, generation, toggle, reload, reveal };
 }

@@ -198,6 +198,7 @@ export const filesApi = {
     path: string;
     local_paths: string[];
     on_conflict?: ConflictPolicy;
+    files_only?: boolean;
     transfer_id?: string;
   }) {
     return request<UploadResult>(

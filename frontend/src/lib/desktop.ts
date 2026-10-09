@@ -37,7 +37,25 @@ export interface NativeDrop {
   x: number; // позиция курсора в CSS-пикселях окна (для leave — 0)
   y: number;
 }
-
+/** Системный выбор файлов или фото с компьютера. Пустой список — отказ. */
+export async function pickLocalFiles(kind: "photo" | "file"): Promise<string[]> {
+  if (!isTauri()) {
+    return [];
+  }
+  const picked = await open({
+    multiple: true,
+    directory: false,
+    title: kind === "photo" ? "Выберите фото" : "Выберите файлы",
+    filters:
+      kind === "photo"
+        ? [{ name: "Фото", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }]
+        : undefined,
+  });
+  if (!picked) {
+    return [];
+  }
+  return Array.isArray(picked) ? picked : [picked];
+}
 /**
  * Файлы, перетаскиваемые в окно с рабочего стола (настоящие пути).
  * Внутренние перетаскивания страницы сюда не попадают. Возвращает функцию отписки.

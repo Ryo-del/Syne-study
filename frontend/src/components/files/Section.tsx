@@ -14,7 +14,7 @@ import { SECTION_TITLES, type SectionId } from "../../files/uiState";
 import { apiOwner, useSectionTree, type Row } from "../../files/useSectionTree";
 import { useFilesCtx } from "./FilesContext";
 import { useSectionActions } from "./useSectionActions";
-
+import type { DropHover } from "./FilesContext";
 import { NO_SELECTION, type Selection } from "../../files/selection";
 
 interface Props {
@@ -177,7 +177,85 @@ export function Section({
     rootEntry,
     paneId,
   });
+    const hv = ctx.dropHover;
+  const rootHover = !!hv && hv.section === id && hv.key === "root";
+  const [scrollKey, setScrollKey] = useState<string | null>(null);
+  const handledReveal = useRef(0);
 
+  /** Цель сброса под курсором: папка (или родитель файла) и есть ли право «вставлять». */
+  function resolveDrop(index: number): DropHover | null {
+    const row = index >= 0 ? rows[index] : undefined;
+    let folder: FileEntry | null = null;
+    let key = "root";
+    if (row) {
+      if (row.entry.is_dir) {
+        folder = row.entry;
+        key = row.key;
+      } else {
+        const p = row.entry.path;
+        const parentPath = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+        const pr = rows.find((r) => r.entry.is_dir && r.entry.owner === row.entry.owner && r.entry.path === parentPath);
+        if (pr) {
+          folder = pr.entry;
+          key = pr.key;
+        } else if (id === "mine" && parentPath === "") {
+          folder = rootEntry;
+        }
+      }
+    } else if (id === "mine") {
+      folder = rootEntry; // пустое место «Моей папки» это её корень
+    }
+    if (!folder) return null;
+    return {
+      section: id,
+      key,
+      entry: folder,
+      owner: apiOwner(id, folder),
+      path: folder.path,
+      ok: canDo(ctx.me, id, folder, "paste"),
+    };
+  }
+
+  useEffect(() => {
+    ctx.registerResolver(id, resolveDrop);
+    return () => ctx.registerResolver(id, null);
+  });
+
+  // Запрос «показать в дереве» из поиска.
+  useEffect(() => {
+    const r = ctx.reveal;
+    if (!r || r.section !== id || r.nonce === handledReveal.current || tree.status !== "ready") return;
+    handledReveal.current = r.nonce;
+    void (async () => {
+      const res = await tree.reveal(r.entry);
+      if (res.error) notify(res.error);
+      if (res.key) {
+        select([res.key], res.key);
+        setScrollKey(res.key);
+      } else if (!res.error) {
+        notify("Не удалось показать файл в дереве");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.reveal, tree.status]);
+
+  useEffect(() => {
+    if (!scrollKey) return;
+    const i = rows.findIndex((r) => r.key === scrollKey);
+    if (i < 0) return;
+    setScrollKey(null);
+    requestAnimationFrame(() => {
+      bodyRef.current?.querySelector(`[data-index="${i}"]`)?.scrollIntoView({ block: "center" });
+    });
+  }, [scrollKey, rows]);
+
+  function startRowDrag(e: ReactPointerEvent, row: Row) {
+    if (e.button !== 0 || editing || (e.target as HTMLElement).closest("input")) return;
+    const group = (selected.has(row.key) ? selectedRows : [row]).filter(
+      (r) => !(id === "server" && r.depth === 0), // корень владельца не перетаскиваем
+    );
+    ctx.itemDragStart(e, id, group.map((r) => r.entry));
+  }
   useEffect(() => {
     if (id === "favorites" && ctx.favVersion > 0) void tree.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,6 +275,7 @@ export function Section({
   }
 
   function handleRowClick(e: ReactMouseEvent, row: Row, index: number) {
+    if (ctx.wasDragging()) return;
     bodyRef.current?.focus();
     const additive = e.ctrlKey || e.metaKey;
 
@@ -362,7 +441,8 @@ export function Section({
         <>
           <div
             ref={bodyRef}
-            className="fx-body"
+            className={`fx-body${rootHover ? (hv?.ok ? " drop-ok" : " drop-no") : ""}`}
+            data-fx-body={id}
             tabIndex={0}
             role="tree"
             onKeyDown={onKeyDown}
@@ -390,8 +470,12 @@ export function Section({
                   role="treeitem"
                   aria-selected={selected.has(row.key)}
                   aria-expanded={row.entry.is_dir ? row.expanded : undefined}
-                  className={`fx-row${selected.has(row.key) ? " sel" : ""}`}
-                  style={{ paddingLeft: 6 + row.depth * 14 }}
+                  className={`fx-row${selected.has(row.key) ? " sel" : ""}${
+                    hv && hv.section === id && hv.key === row.key ? (hv.ok ? " drop-ok" : " drop-no") : ""
+                  }`}
+                   style={{ paddingLeft: 6 + row.depth * 14 }}
+                  onPointerDown={(e) => startRowDrag(e, row)}
+
                   onContextMenu={(e) => actions.rowMenu(e, row)}
                   onDoubleClick={() => openRow(row)}
                   onClick={(e) => handleRowClick(e, row, index)}

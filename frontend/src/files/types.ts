@@ -90,6 +90,7 @@ export interface UploadResult {
   failed?: { path: string; error: string }[];
   /** Имена, которые уже есть на сервере: загрузка не начата, нужно выбрать политику. */
   conflicts?: string[];
+  items?: FileEntry[];
 }
 
 export interface Ref {
