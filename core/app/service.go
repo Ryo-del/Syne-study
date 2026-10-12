@@ -85,6 +85,8 @@ type ChatSummary struct {
 	Online        bool   `json:"online"`
 	Blocked       bool   `json:"blocked"`
 	UnreadCount   int    `json:"unread_count"`
+	IsGroup       bool   `json:"is_group,omitempty"`
+	Emoji         string `json:"emoji,omitempty"`
 }
 
 type UIMessage struct {
@@ -96,6 +98,7 @@ type UIMessage struct {
 	Timestamp int64  `json:"timestamp"`
 	Direction string `json:"direction"`
 	Strategy  string `json:"strategy"`
+	FromName  string `json:"from_name,omitempty"`
 }
 
 type Event struct {
@@ -161,6 +164,7 @@ type Service struct {
 	peerKeys    map[string][]byte // login -> X25519 public key
 	peerNames   map[string]string // login -> "Имя Фамилия"
 	chatKeys    map[string][]byte // chatID -> ключ чата
+	groupKeys   map[string][]byte // chatID группы -> общий ключ
 	unread      map[string]int
 	rateStates  map[string]*rateState
 	whoamiAt    map[string]time.Time
@@ -198,6 +202,7 @@ func New(config Config) (*Service, error) {
 		peerKeys:    make(map[string][]byte),
 		peerNames:   make(map[string]string),
 		chatKeys:    make(map[string][]byte),
+		groupKeys:   make(map[string][]byte),
 		unread:      make(map[string]int),
 		rateStates:  make(map[string]*rateState),
 		whoamiAt:    make(map[string]time.Time),
@@ -314,9 +319,10 @@ func (s *Service) beginSession(login string, r *p2ptransport.LoginResult) error 
 	s.sessCancel = cancel
 	s.sessionMu.Unlock()
 	s.pushFileLists()
-	s.sessWG.Add(2)
+	s.sessWG.Add(3)
 	go s.autosaveLoop(sessCtx, sess)
 	go s.mailboxLoop(sessCtx, sess)
+	go s.groupLoop(sessCtx, sess)
 	go s.startPresence(sessCtx, sess, gen)
 
 	s.emit(Event{Type: "logged_in", Timestamp: time.Now().UnixMilli()})
@@ -371,6 +377,7 @@ func (s *Service) resetSessionState() {
 	s.peerKeys = make(map[string][]byte)
 	s.peerNames = make(map[string]string)
 	s.chatKeys = make(map[string][]byte)
+	s.groupKeys = make(map[string][]byte)
 	s.unread = make(map[string]int)
 	s.whoamiAt = make(map[string]time.Time)
 	for id, n := range s.neighbors {
@@ -814,6 +821,7 @@ func (s *Service) ListMessages(chatID string) ([]UIMessage, error) {
 			Timestamp: m.Timestamp,
 			Direction: direction,
 			Strategy:  m.Strategy,
+			FromName:  m.FromName,
 		})
 	}
 	return out, nil
@@ -900,6 +908,9 @@ func (s *Service) SendMessage(chatID, targetPeerID, text string) (UIMessage, err
 	text = strings.TrimSpace(text)
 	if chatID == "" || text == "" {
 		return UIMessage{}, fmt.Errorf("chat_id and text are required")
+	}
+	if isGroupChatID(chatID) {
+		return s.sendGroupMessage(sess, chatID, text)
 	}
 	rec, ok := history.GetChatRecord(chatID)
 	if !ok || rec.PeerUserID == "" {
@@ -1245,6 +1256,9 @@ func (s *Service) DeleteChat(chatID string) error {
 	if chatID == "" {
 		return fmt.Errorf("chat_id is required")
 	}
+	if isGroupChatID(chatID) {
+		return fmt.Errorf("group chat cannot be deleted")
+	}
 	if !history.DeleteChat(chatID) {
 		return fmt.Errorf("chat not found: %s", chatID)
 	}
@@ -1439,6 +1453,19 @@ func (s *Service) listChats() ([]ChatSummary, error) {
 
 	chats := make([]ChatSummary, 0, len(records))
 	for _, record := range records {
+		if record.GroupID != 0 {
+			chats = append(chats, ChatSummary{
+				ChatID:        record.ChatID,
+				PeerID:        record.ChatID, // уникальный ключ для интерфейса
+				Title:         record.Title,
+				Preview:       record.LastMessage,
+				LastTimestamp: record.LastTimestamp,
+				IsGroup:       true,
+				Emoji:         record.Emoji,
+				UnreadCount:   s.unread[record.ChatID],
+			})
+			continue
+		}
 		addr := ""
 		title := ""
 		c, ok := contactByUser[record.PeerUserID]

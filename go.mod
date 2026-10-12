@@ -3,7 +3,7 @@ module Syne
 go 1.26.5
 
 require (
-	github.com/Ryo-del/Syne-protocol v0.0.2-0.20261011193327-f8a501d1d5eb
+	github.com/Ryo-del/Syne-protocol v0.0.2-0.20261012082050-2be9aaa7012e
 	github.com/libp2p/go-libp2p v0.48.0
 	github.com/libp2p/go-libp2p-kad-dht v0.39.0
 	github.com/libp2p/go-libp2p-record v0.3.1

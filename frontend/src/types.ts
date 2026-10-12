@@ -60,6 +60,8 @@ export type ChatSummary = {
   blocked: boolean;
   unread_count: number;
   peer_user_id?: string;
+  is_group?: boolean;
+  emoji?: string;
 };
 
 export type UIMessage = {
@@ -71,6 +73,7 @@ export type UIMessage = {
   timestamp: number;
   direction: "incoming" | "outgoing";
   strategy: string;
+  from_name?: string;
 };
 
 export type Snapshot = {

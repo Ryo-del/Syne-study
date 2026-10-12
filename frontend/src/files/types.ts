@@ -47,6 +47,9 @@ export interface FileEntry {
   owner_name: string; // «Фамилия Имя» владельца
   snippet?: string; // поиск: строка с совпадением в содержимом
   can?: Partial<Record<FileAction | FileCap, boolean>>;
+  is_group?: boolean;
+  group?: string;
+  group_emoji?: string;
 }
 
 export interface AclRule {

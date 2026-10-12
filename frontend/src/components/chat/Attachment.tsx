@@ -17,7 +17,8 @@ interface Props {
 
 export default function Attachment({ att, outgoing, onNotify }: Props) {
   // Откуда брать байты. Входящее читаем только из своей папки: путь в сообщении задаёт отправитель.
-  const source = outgoing
+   const isGroupAtt = (att.to ?? "").startsWith("grp:");
+   const source = outgoing || isGroupAtt
     ? (att.src ?? null)
     : sameUser(att.to, getSessionLogin()) && att.path
       ? { owner: "", path: att.path }

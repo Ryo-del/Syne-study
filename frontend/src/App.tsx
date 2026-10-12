@@ -390,15 +390,12 @@ useEffect(() => {
     selectedChat?.known_addr ||
     selectedPeer?.addr ||
     "";
-  const selectedPeerEmoji =
+    const selectedPeerEmoji =
     selectedChat
-      ? peerEmojis[
-          selectedChat.peer_id
-        ] ??
-        getInitial(
-          selectedChat.title ||
-            selectedChat.peer_id,
-        )
+      ? selectedChat.is_group && selectedChat.emoji
+        ? selectedChat.emoji
+        : peerEmojis[selectedChat.peer_id] ??
+          getInitial(selectedChat.title || selectedChat.peer_id)
       : "🙂";
 
   const t = (key: string) =>
@@ -1140,7 +1137,11 @@ useEffect(() => {
     setEmojiPickerTarget(null);
   }
 
-  function getPeerAvatar(peerId: string, label: string) {
+    function getPeerAvatar(peerId: string, label: string) {
+    if (peerId.startsWith("grp:")) {
+      const g = snapshot.chats.find((c) => c.chat_id === peerId);
+      if (g?.emoji) return g.emoji;
+    }
     return peerEmojis[peerId] ?? getInitial(label);
   }
 
@@ -1178,6 +1179,7 @@ useEffect(() => {
       setError(describeError(err, "Failed to delete chat"));
     }
   }
+  
   function handleChatContextMenu(event: React.MouseEvent, chatId: string) {
     event.preventDefault();
     event.stopPropagation();

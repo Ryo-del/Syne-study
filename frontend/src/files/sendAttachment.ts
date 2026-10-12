@@ -4,7 +4,7 @@ import { encodeAttachment, isImageName } from "./attachment";
 import { describeFileError } from "./errors";
 import { baseName, isJunkName } from "./hidden";
 import type { FileEntry } from "./types";
-
+import { getSessionLogin } from "../lib/session";
 /** Папка на сервере, куда попадают файлы, отправленные с компьютера. */
 export const SENT_DIR = "Отправленные";
 
@@ -12,6 +12,7 @@ export interface ChatTarget {
   chat_id: string;
   peer_id: string;
   peer_user_id?: string;
+  group?: string; // название группы — для группового чата
 }
 
 export interface SendReport {
@@ -19,8 +20,24 @@ export interface SendReport {
   errors: string[];
 }
 
-/** Копия файла в «Полученные» получателя и сообщение-вложение в чат. owner — как ждёт API ("" — свой). */
 async function deliver(chat: ChatTarget, owner: string, entry: FileEntry): Promise<void> {
+  if (chat.group) {
+    await filesApi.shareGroup(owner, entry.path, chat.group);
+    await sendMessage({
+      chat_id: chat.chat_id,
+      target_id: chat.peer_id,
+      text: encodeAttachment({
+        v: 1,
+        kind: isImageName(entry.name) ? "photo" : "file",
+        name: entry.name,
+        size: entry.size,
+        to: chat.chat_id,
+        path: "",
+        src: { owner: owner || getSessionLogin(), path: entry.path },
+      }),
+    });
+    return;
+  }
   const to = chat.peer_user_id;
   if (!to) throw new Error("У этого чата нет аккаунта получателя");
   const copy = await filesApi.send(owner, entry.path, to);

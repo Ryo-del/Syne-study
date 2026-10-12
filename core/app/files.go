@@ -98,6 +98,7 @@ var plainFilesOps = map[string]bool{
 	protocol.FilesOpRulesGet: true, protocol.FilesOpRuleSet: true, protocol.FilesOpRuleClear: true,
 	protocol.FilesOpQuota: true, protocol.FilesOpFavAdd: true, protocol.FilesOpFavRemove: true,
 	protocol.FilesOpFavList: true, protocol.FilesOpUIGet: true, protocol.FilesOpUIPut: true,
+	protocol.FilesOpListGroup: true, protocol.FilesOpShareGroup: true,
 	protocol.FilesOpSearch: true, protocol.FilesOpSend: true,
 }
 

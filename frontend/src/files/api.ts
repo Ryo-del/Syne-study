@@ -25,6 +25,15 @@ export function newTransferId() {
 }
 
 export const filesApi = {
+    /** Папки учеников внутри группы («Сервер» → папка группы). */
+  async listGroup(group: string): Promise<FileEntry[]> {
+    return (await call("list_group", { group })).entries ?? [];
+  },
+
+  /** Открыть файл участникам группы (для вложений в групповом чате). */
+  async shareGroup(owner: string, path: string, group: string) {
+    await call("share_group", { owner, path, group });
+  },
   /** Папки других пользователей, в которых для меня что-то открыто («Сервер»). */
   async listOwners(): Promise<FileEntry[]> {
     return (await call("list_owners")).entries ?? [];

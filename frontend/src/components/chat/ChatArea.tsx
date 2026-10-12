@@ -123,11 +123,16 @@ export default function ChatArea({
   const chatRef = useRef(selectedChat);
   chatRef.current = selectedChat;
 
-  const canAttach = !!selectedChat?.peer_user_id && !selectedChat.blocked;
+  const canAttach =
+    !!selectedChat &&
+    (!!selectedChat.peer_user_id || !!selectedChat.is_group) &&
+    !selectedChat.blocked;
 
   function target(): ChatTarget | null {
     const c = chatRef.current;
-    return c?.peer_user_id ? { chat_id: c.chat_id, peer_id: c.peer_id, peer_user_id: c.peer_user_id } : null;
+    if (!c) return null;
+    if (c.is_group) return { chat_id: c.chat_id, peer_id: c.peer_id, group: c.title };
+    return c.peer_user_id ? { chat_id: c.chat_id, peer_id: c.peer_id, peer_user_id: c.peer_user_id } : null;
   }
 
   async function sendLocal(paths: string[]) {
@@ -170,7 +175,8 @@ export default function ChatArea({
       }
       const r = el.getBoundingClientRect();
       const inside = e.x >= r.left && e.x <= r.right && e.y >= r.top && e.y <= r.bottom;
-      const ok = inside && !!chatRef.current?.peer_user_id && !chatRef.current.blocked;
+            const c = chatRef.current;
+      const ok = inside && !!c && (!!c.peer_user_id || !!c.is_group) && !c.blocked;
       if (e.phase === "drop") {
         setDropActive(false);
         if (ok) setPendingDrop(e.paths);
@@ -203,11 +209,9 @@ export default function ChatArea({
                 <button
                   type="button"
                   className="chat-header-name"
-                  onClick={() =>
-                    setShowDetailPanel(
-                      !showDetailPanel,
-                    )
-                  }
+                  onClick={() => {
+                    if (!selectedChat.is_group) setShowDetailPanel(!showDetailPanel);
+                  }}
                 >
                   {selectedChat.title}
                 </button>
@@ -217,7 +221,7 @@ export default function ChatArea({
                 </h2>
               )}
 
-              {selectedChat ? (
+          {selectedChat && !selectedChat.is_group ? (
                 <div
                   className={
                     selectedChat.blocked
@@ -230,30 +234,25 @@ export default function ChatArea({
               ) : null}
             </div>
           </div>
-
+              
           <div className="chat-header-right">
             {selectedChat ? (
               <>
-                {!selectedContact && (
-                  <button
-                    className="header-btn"
-                    onClick={onAddContact}
-                  >
+                {!selectedContact && !selectedChat.is_group && (
+                  <button className="header-btn" onClick={onAddContact}>
                     + Add Contact
                   </button>
                 )}
 
-                <button
-                  className="kebab-btn"
-                  onClick={() =>
-                    setShowDetailPanel(
-                      !showDetailPanel,
-                    )
-                  }
-                  title="Toggle peer details"
-                >
-                  ⋮
-                </button>
+                {!selectedChat.is_group && (
+                  <button
+                    className="kebab-btn"
+                    onClick={() => setShowDetailPanel(!showDetailPanel)}
+                    title="Toggle peer details"
+                  >
+                    ⋮
+                  </button>
+                )}
               </>
             ) : null}
           </div>
@@ -302,6 +301,9 @@ export default function ChatArea({
                       className={`msg-row ${message.direction}`}
                     >
                       <div className={`msg-content ${message.direction}`}>
+                        {selectedChat.is_group && message.direction === "incoming" && (
+                          <div className="msg-sender">{message.from_name || message.from}</div>
+                        )}
                         <div
                           className={`msg-bubble ${message.direction}${att ? " has-attachment" : ""}${att?.kind === "photo" ? " media" : ""}`}
                         >
@@ -336,7 +338,7 @@ export default function ChatArea({
                 ) : null}
               </div>
 
-                            {uploads.map((u) => {
+          {uploads.map((u) => {
                 const t = transfers.find((x) => x.id === u.id);
                 const pct = t && t.total > 0 ? Math.round((t.done / t.total) * 100) : null;
                 return (
@@ -390,7 +392,7 @@ export default function ChatArea({
           )}
         </section>
       </div>
-                {picker && selectedChat ? (
+      {picker && selectedChat ? (
         <FilesPickerDialog
           onCancel={() => setPicker(false)}
           onPick={(items) => {
@@ -427,8 +429,7 @@ export default function ChatArea({
           </div>
         </div>
       ) : null}
-      {selectedChat &&
-      showDetailPanel ? (
+            {selectedChat && showDetailPanel && !selectedChat.is_group ? (
         <DetailPanel
           selectedChat={selectedChat}
           selectedContact={
@@ -469,6 +470,7 @@ export default function ChatArea({
           onBlockReasonChange={
             onBlockReasonChange
           }
+          
           onBlock={onBlock}
         />
       ) : null}

@@ -19,6 +19,7 @@ type StoredMessage struct {
 	Timestamp int64  `json:"timestamp"`
 	Outgoing  bool   `json:"outgoing"`
 	Strategy  string `json:"strategy"`
+	FromName  string `json:"from_name,omitempty"`
 }
 
 type ChatRecord struct {
@@ -28,6 +29,10 @@ type ChatRecord struct {
 	Title         string `json:"title"`
 	LastMessage   string `json:"last_message"`
 	LastTimestamp int64  `json:"last_timestamp"`
+	GroupID       int64  `json:"group_id,omitempty"` // != 0 — групповой чат
+	Emoji         string `json:"emoji,omitempty"`
+	Cursor        int64  `json:"cursor,omitempty"` // id последнего полученного сообщения на сервере
+	Synced        bool   `json:"synced,omitempty"` // первая загрузка истории завершена
 }
 
 var (
@@ -102,6 +107,7 @@ func TouchChat(r ChatRecord) {
 	r.PeerID = strings.TrimSpace(r.PeerID)
 	r.PeerUserID = strings.TrimSpace(r.PeerUserID)
 	r.Title = strings.TrimSpace(r.Title)
+	r.Emoji = strings.TrimSpace(r.Emoji)
 	r.LastMessage = strings.TrimSpace(r.LastMessage)
 
 	mu.Lock()
@@ -119,6 +125,12 @@ func TouchChat(r ChatRecord) {
 	if r.Title != "" {
 		c.Title = r.Title
 	}
+	if r.GroupID != 0 {
+		c.GroupID = r.GroupID
+	}
+	if r.Emoji != "" {
+		c.Emoji = r.Emoji
+	}
 	if r.LastMessage != "" || r.LastTimestamp > 0 {
 		c.LastMessage = r.LastMessage
 		c.LastTimestamp = r.LastTimestamp
@@ -127,6 +139,28 @@ func TouchChat(r ChatRecord) {
 	version++
 }
 
+// AdvanceGroup помечает групповой чат синхронизированным и двигает курсор только вперёд.
+func AdvanceGroup(chatID string, cursor int64) {
+	mu.Lock()
+	defer mu.Unlock()
+	c, ok := chats[chatID]
+	if !ok {
+		return
+	}
+	changed := false
+	if cursor > c.Cursor {
+		c.Cursor = cursor
+		changed = true
+	}
+	if !c.Synced {
+		c.Synced = true
+		changed = true
+	}
+	if changed {
+		chats[chatID] = c
+		version++
+	}
+}
 func GetChatRecord(chatID string) (ChatRecord, bool) {
 	mu.RLock()
 	defer mu.RUnlock()

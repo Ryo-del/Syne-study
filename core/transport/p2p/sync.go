@@ -82,3 +82,27 @@ func (n *Node) SyncLogout(ctx context.Context, serverAddr, sessionID string) err
 	_, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpLogout, SessionID: sessionID})
 	return err
 }
+func (n *Node) GroupList(ctx context.Context, serverAddr, sessionID string) ([]protocol.GroupInfo, error) {
+	resp, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpGroupList, SessionID: sessionID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Groups, nil
+}
+
+func (n *Node) GroupSend(ctx context.Context, serverAddr, sessionID string, groupID int64, data []byte) error {
+	_, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{
+		Type: protocol.SyncOpGroupSend, SessionID: sessionID, GroupID: groupID, Data: data,
+	})
+	return err
+}
+
+func (n *Node) GroupFetch(ctx context.Context, serverAddr, sessionID string, groupID, afterID int64) ([]protocol.MailboxItem, error) {
+	resp, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{
+		Type: protocol.SyncOpGroupFetch, SessionID: sessionID, GroupID: groupID, AfterID: afterID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}

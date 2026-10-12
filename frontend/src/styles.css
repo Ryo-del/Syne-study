@@ -1981,3 +1981,8 @@ button {
   white-space: nowrap;
   font-size: 0.84rem;
 }
+.msg-sender {
+  margin: 0 10px 3px;
+  font-size: 12px;
+  opacity: 0.6;
+}
