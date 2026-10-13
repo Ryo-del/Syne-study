@@ -14,6 +14,8 @@ export interface Row {
 }
 
 export function entryKey(e: FileEntry) {
+  // у групп owner и path пустые, поэтому ключ строим по имени группы
+  if (e.is_group) return `\u0001group\u0000${e.group ?? e.name}`;
   return `${e.owner}\u0000${e.path}`;
 }
 
@@ -61,12 +63,15 @@ export function useSectionTree(kind: SectionId) {
   }, []);
 
   const listFolder = useCallback(
-    async (entry: FileEntry) => {
-      const r = await filesApi.list(apiOwner(kind, entry), entry.path);
-      return sortEntries(r.entries);
-    },
-    [kind],
-  );
+  async (entry: FileEntry) => {
+    if (entry.is_group) {
+      return sortEntries(await filesApi.listGroup(entry.group || entry.name));
+    }
+    const r = await filesApi.list(apiOwner(kind, entry), entry.path);
+    return sortEntries(r.entries);
+  },
+  [kind],
+);
 
   const reload = useCallback(async () => {
     const g = ++gen.current;
@@ -154,33 +159,43 @@ export function useSectionTree(kind: SectionId) {
     [bump, listFolder],
   );
     /** Раскрывает цепочку папок до файла. Возвращает ключ строки или текст ошибки. */
-  const reveal = useCallback(
-    async (target: FileEntry): Promise<{ key: string | null; error: string | null }> => {
-      const d = data.current;
-      const parts = target.path.split("/").filter(Boolean);
-      const chain: string[] = kind === "server" ? [""] : []; // в «Сервере» сначала папка владельца
-      for (let i = 1; i < parts.length; i += 1) chain.push(parts.slice(0, i).join("/"));
+  /** Раскрывает цепочку папок до файла. Возвращает ключ строки или текст ошибки. */
+const reveal = useCallback(
+  async (target: FileEntry): Promise<{ key: string | null; error: string | null }> => {
+    const d = data.current;
+    const parts = target.path.split("/").filter(Boolean);
+    const chain: string[] = kind === "server" ? [""] : []; // в «Сервере» сначала папка владельца
+    for (let i = 1; i < parts.length; i += 1) chain.push(parts.slice(0, i).join("/"));
 
-      // В «Моей папке» владелец один; сравниваем по пути, чтобы не зависеть от формы owner.
-      const findKnown = (p: string): FileEntry | undefined => {
-        if (kind !== "mine") return d.known.get(`${target.owner}\u0000${p}`);
-        for (const v of d.known.values()) if (v.path === p) return v;
-        return undefined;
-      };
+    // В «Моей папке» владелец один; сравниваем по пути, чтобы не зависеть от формы owner.
+    const findKnown = (p: string): FileEntry | undefined => {
+      if (kind !== "mine") return d.known.get(`${target.owner}\u0000${p}`);
+      for (const v of d.known.values()) if (v.path === p) return v;
+      return undefined;
+    };
 
-      for (const p of chain) {
-        const e = findKnown(p);
-        if (!e) return { key: null, error: null };
-        if (!d.expanded.has(entryKey(e))) {
-          const msg = await toggle(e);
-          if (msg) return { key: null, error: msg };
-        }
+    // В «Сервере» у ученика с группой сначала раскрываем папку группы.
+    if (kind === "server" && target.group) {
+      const g = d.known.get(`\u0001group\u0000${target.group}`);
+      if (g && !d.expanded.has(entryKey(g))) {
+        const msg = await toggle(g);
+        if (msg) return { key: null, error: msg };
       }
-      const self = findKnown(target.path);
-      return { key: self ? entryKey(self) : null, error: null };
-    },
-    [kind, toggle],
-  );
+    }
+
+    for (const p of chain) {
+      const e = findKnown(p);
+      if (!e) return { key: null, error: null };
+      if (!d.expanded.has(entryKey(e))) {
+        const msg = await toggle(e);
+        if (msg) return { key: null, error: msg };
+      }
+    }
+    const self = findKnown(target.path);
+    return { key: self ? entryKey(self) : null, error: null };
+  },
+  [kind, toggle],
+);
   const rows = useMemo(() => {
     const d = data.current;
     const out: Row[] = [];

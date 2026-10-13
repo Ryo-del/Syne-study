@@ -923,7 +923,7 @@ function handleQuickAddContact() {
 async function handleOpenContact(contact: Contact) {
   await handleOpenPeer(
     contact.peer_id,
-  
+    contact.ip && contact.port ? joinAddress(contact.ip, contact.port) : undefined,
     contact.name || contact.peer_id,
     contact.user_id,
   );
@@ -1285,13 +1285,9 @@ const previousChatIdRef = useRef<string>("");
                 onQueryChange={setNearbyQuery}
                 getPeerAvatar={getPeerAvatar}
                 onSetPeerEmoji={setPeerEmoji}
-                onOpenPeer={(peerId, peerAddr, name) => {
-                  void handleOpenPeer(
-                    peerId,
-                    peerAddr,
-                    name,
-                  );
-                }}
+                onOpenPeer={(peerId, peerAddr, name, userId) => {
+  void handleOpenPeer(peerId, peerAddr, name, userId);
+}}
               />
             ) : (
               <PeersPanel
@@ -1315,11 +1311,13 @@ const previousChatIdRef = useRef<string>("");
                   peerId,
                   peerAddr,
                   name,
+                  userId
                 ) => {
                   void handleOpenPeer(
                     peerId,
                     peerAddr,
                     name,
+                    userId
                   );
                 }}
                 onChatContextMenu={handleChatContextMenu}

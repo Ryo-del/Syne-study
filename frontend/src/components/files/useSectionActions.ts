@@ -39,6 +39,12 @@ export function useSectionActions(d: ActionDeps) {
   const { id, tree, notify } = d;
   const can = (e: FileEntry, cap: FileAction | FileCap) => canDo(ctx.me, id, e, cap);
 
+  /**
+   * Верхние узлы «Сервера»: папка группы (is_group) и корень ученика (path === "").
+   * Их нельзя переименовать, удалить, скопировать и т.п.
+   */
+  const isTopNode = (e: FileEntry) => id === "server" && (!!e.is_group || e.path === "");
+
   /** После изменения: обновить папку-приёмник. Закрытую папку раскрываем. */
   async function refreshAfter(parent: FileEntry | null) {
     const row = parent ? tree.rows.find((r) => r.key === entryKey(parent)) : undefined;
@@ -51,6 +57,7 @@ export function useSectionActions(d: ActionDeps) {
   }
 
   async function createIn(parent: FileEntry | null, isDir: boolean) {
+    if (parent?.is_group) return; // в папке группы создавать нельзя
     const owner = parent ? apiOwner(id, parent) : "";
     const parentPath = parent?.path ?? "";
     const base = isDir ? "Новая папка" : "Новый файл.txt";
@@ -80,17 +87,20 @@ export function useSectionActions(d: ActionDeps) {
   }
 
   function copy(entries: FileEntry[]) {
+    const real = entries.filter((e) => !e.is_group);
+    if (real.length === 0) return;
     ctx.setClipboard(
-      entries.map((e) => ({ owner: apiOwner(id, e), path: e.path, name: e.name, is_dir: e.is_dir })),
+      real.map((e) => ({ owner: apiOwner(id, e), path: e.path, name: e.name, is_dir: e.is_dir })),
     );
     notify(
-      entries.length === 1 ? `Скопировано: ${entries[0].name}` : `Скопировано элементов: ${entries.length}`,
+      real.length === 1 ? `Скопировано: ${real[0].name}` : `Скопировано элементов: ${real.length}`,
       "info",
     );
   }
 
-    async function pasteInto(dest: FileEntry | null) {
+  async function pasteInto(dest: FileEntry | null) {
     if (ctx.clipboard.length === 0) return;
+    if (dest?.is_group) return; // в папку группы вставлять нельзя
     const r = await pasteAll(
       ctx.clipboard,
       { owner: dest ? apiOwner(id, dest) : "", path: dest?.path ?? "" },
@@ -108,6 +118,7 @@ export function useSectionActions(d: ActionDeps) {
   async function duplicate(entries: FileEntry[]) {
     const made: FileEntry[] = [];
     for (const e of entries) {
+      if (e.is_group) continue;
       try {
         const n = await filesApi.duplicate(apiOwner(id, e), e.path);
         if (n) made.push(n);
@@ -152,7 +163,11 @@ export function useSectionActions(d: ActionDeps) {
 
   async function copyPath(entries: FileEntry[]) {
     const text = entries
-      .map((e) => `${e.owner_name || e.owner}/${e.path}`.replace(/\/$/, ""))
+      .map((e) =>
+        e.is_group
+          ? e.group || e.name
+          : `${e.group ? `${e.group}/` : ""}${e.owner_name || e.owner}/${e.path}`.replace(/\/$/, ""),
+      )
       .join("\n");
     try {
       await navigator.clipboard.writeText(text);
@@ -163,8 +178,9 @@ export function useSectionActions(d: ActionDeps) {
   }
 
   async function setFavorite(entries: FileEntry[], add: boolean) {
+    const real = entries.filter((e) => !e.is_group);
     const res = await Promise.allSettled(
-      entries.map((e) =>
+      real.map((e) =>
         add ? filesApi.favAdd(apiOwner(id, e), e.path) : filesApi.favRemove(apiOwner(id, e), e.path),
       ),
     );
@@ -176,7 +192,7 @@ export function useSectionActions(d: ActionDeps) {
   /** Настоящее удаление (меню «Удалить» и Delete в «Моей папке» и «Сервере»). */
   async function removeReal(targets: Row[]) {
     const cand = targets
-      .filter((r) => !(id === "server" && r.depth === 0) && can(r.entry, "delete"))
+      .filter((r) => !isTopNode(r.entry) && can(r.entry, "delete"))
       .map((r) => r.entry);
     if (cand.length === 0) {
       notify("Нет права на удаление");
@@ -204,11 +220,18 @@ export function useSectionActions(d: ActionDeps) {
       targets = [row];
     }
     const entries = targets.map((r) => r.entry);
+
+    // Папка группы — только контейнер: никаких действий над ней, кроме обновления.
+    if (entries.some((x) => x.is_group)) {
+      ctx.openMenu(e.clientX, e.clientY, [{ label: "Обновить", onClick: () => void tree.reload() }]);
+      return;
+    }
+
     const single = entries.length === 1;
     const t = entries[0];
     const singleDir = single && t.is_dir;
     const every = (cap: FileAction | FileCap) => entries.every((x) => can(x, cap));
-    const ownerRoot = targets.some((r) => id === "server" && r.depth === 0);
+    const ownerRoot = entries.some(isTopNode);
     const hasClip = ctx.clipboard.length > 0;
     const allFav = entries.every((x) => ctx.favKeys.has(entryKey(x)));
     // «Настроить права»: владельцу и преподавателю; чужим пункт не показываем.
@@ -229,7 +252,7 @@ export function useSectionActions(d: ActionDeps) {
         {
           label: "Открыть",
           disabled: !(single && isTxt(t) && can(t, "open")),
-            onClick: () => ctx.openFile(t, id, can(t, "edit")),
+          onClick: () => ctx.openFile(t, id, can(t, "edit")),
         },
         {
           label: "Открыть как…",
@@ -259,7 +282,7 @@ export function useSectionActions(d: ActionDeps) {
         {
           label: "Отправить",
           disabled: !(single && !t.is_dir && can(t, "send")),
-           onClick: () => ctx.openSend(t, id),
+          onClick: () => ctx.openSend(t, id),
         },
         { separator: true },
       );
@@ -277,10 +300,14 @@ export function useSectionActions(d: ActionDeps) {
     }
 
     items.push(
-      { label: "Скопировать", disabled: !every("copy"), onClick: () => copy(entries) },
+      { label: "Скопировать", disabled: ownerRoot || !every("copy"), onClick: () => copy(entries) },
       { label: "Скопировать путь", onClick: () => void copyPath(entries) },
       { separator: true },
-      { label: "Дублировать", disabled: !every("duplicate"), onClick: () => void duplicate(entries) },
+      {
+        label: "Дублировать",
+        disabled: ownerRoot || !every("duplicate"),
+        onClick: () => void duplicate(entries),
+      },
       { separator: true },
       {
         label: "Переименовать",
@@ -295,6 +322,7 @@ export function useSectionActions(d: ActionDeps) {
       { separator: true },
       {
         label: allFav ? "Убрать из избранного" : "Добавить в избранное",
+        disabled: ownerRoot,
         onClick: () => void setFavorite(entries, !allFav),
       },
     );

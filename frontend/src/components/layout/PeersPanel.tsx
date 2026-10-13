@@ -37,10 +37,11 @@ interface PeersPanelProps {
   ) => void;
 
   onOpenPeer: (
-    peerId: string,
-    peerAddr?: string,
-    name?: string,
-  ) => void;
+  peerId: string,
+  peerAddr?: string,
+  name?: string,
+  userId?: string,
+) => void;
 
   onOpenContact: (
     contact: Contact,
@@ -267,13 +268,13 @@ export default function PeersPanel({
                   key={peer.peer_id}
                   className="peer-card"
                   onClick={() =>
-                    onOpenPeer(
-                      peer.peer_id,
-                      peer.addr,
-                      peer.name ||
-                        peer.peer_id,
-                    )
-                  }
+  onOpenPeer(
+    peer.peer_id,
+    peer.addr,
+    peer.name || peer.peer_id,
+    peer.user_id,
+  )
+}
                 >
                   <div
                     className={`peer-card-avatar ${

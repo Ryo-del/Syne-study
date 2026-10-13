@@ -14,7 +14,12 @@ interface NearbyPanelProps {
   onQueryChange: (value: string) => void;
   getPeerAvatar: (peerId: string, label: string) => string;
   onSetPeerEmoji: (peerId: string, emoji: string) => void;
-  onOpenPeer: (peerId: string, peerAddr?: string, name?: string) => void;
+  onOpenPeer: (
+  peerId: string,
+  peerAddr?: string,
+  name?: string,
+  userId?: string,
+) => void;
 }
 
 function displayName(user: OnlineUser) {
@@ -84,8 +89,13 @@ export default function NearbyPanel({
                 type="button"
                 className="nearby-main"
                 onClick={() =>
-                  onOpenPeer(user.peer_id, undefined, label)
-                }
+  onOpenPeer(
+    user.peer_id,
+    undefined,
+    `${user.sname} ${user.fname}`.trim(),
+    user.user_id,
+  )
+}
               >
                 <span
                   className="nearby-avatar"

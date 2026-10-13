@@ -1377,18 +1377,45 @@ func (s *Service) userForPeer(peerID string) string {
 	}
 	return best.UserID
 }
-
+func (s *Service) userForKnownPeer(peerID string) string {
+	if peerID == "" {
+		return ""
+	}
+	found := map[string]struct{}{}
+	if contacts, err := corechat.ListContacts(); err == nil {
+		for _, c := range contacts {
+			if c.PeerID == peerID && c.UserID != "" {
+				found[c.UserID] = struct{}{}
+			}
+		}
+	}
+	for _, rec := range history.ListChatRecords() {
+		if rec.GroupID == 0 && rec.PeerID == peerID && rec.PeerUserID != "" {
+			found[rec.PeerUserID] = struct{}{}
+		}
+	}
+	if len(found) != 1 {
+		return ""
+	}
+	for u := range found {
+		return u
+	}
+	return ""
+}
 func (s *Service) resolveUserID(peerID string) (string, error) {
-	if userID := s.userForPeer(peerID); userID != "" {
+	if userID := s.userForPeer(peerID); userID != "" { // presence: человек онлайн
 		return userID, nil
 	}
-	// Запасной путь для устройств вне presence: спросить напрямую. Результат
-	// намеренно НЕ кэшируется — на том же ПК может зайти другой аккаунт.
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	if userID := s.userForKnownPeer(peerID); userID != "" { // контакты и чаты
+		return userID, nil
+	}
+	// Последний вариант: спросить само устройство. Не кэшируем: на том же ПК
+	// может зайти другой аккаунт.
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.node.WhoAmI(ctx, peerID)
 	if err != nil {
-		return "", fmt.Errorf("resolve user id for peer %s: %w", peerID, err)
+		return "", fmt.Errorf("cannot determine which user owns device %s (is it offline?): %w", peerID, err)
 	}
 	return resp.UserID, nil
 }
