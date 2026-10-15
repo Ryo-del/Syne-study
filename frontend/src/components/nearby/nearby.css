@@ -2,7 +2,6 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-
   background: var(--bg-secondary);
   border-right: 1px solid var(--line);
   overflow: hidden;
@@ -13,15 +12,14 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-
   padding: 20px 20px 6px;
 }
 
 .nearby-header h2 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.2rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
   color: var(--ink);
 }
 
@@ -35,17 +33,13 @@
   min-width: 26px;
   height: 26px;
   padding: 0 8px;
-
   display: flex;
   align-items: center;
   justify-content: center;
-
   border-radius: 999px;
-
   background: var(--signal-dim);
   color: var(--signal);
-  border: 1px solid rgba(35, 165, 90, 0.25);
-
+  border: 1px solid color-mix(in srgb, var(--signal) 28%, transparent);
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -54,26 +48,34 @@
   display: flex;
   align-items: center;
   gap: 8px;
-
-  margin: 10px 16px 4px;
+  margin: 10px 14px 6px;
   padding: 0 12px;
   height: 40px;
-
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
+  background: var(--field-bg);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.nearby-search:hover {
   background: var(--surface);
+}
+
+.nearby-search:focus-within {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
 .nearby-search span {
   font-size: 16px;
-  opacity: 0.5;
+  opacity: 0.6;
   color: var(--ink-muted);
 }
 
 .nearby-search input {
   flex: 1;
   height: 100%;
-
   border: none;
   outline: none;
   background: transparent;
@@ -88,30 +90,17 @@
 .nearby-list {
   flex: 1;
   overflow-y: auto;
-
   display: flex;
   flex-direction: column;
   gap: 2px;
-
-  padding: 4px 10px 10px;
-}
-
-.nearby-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.nearby-list::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
-  border-radius: 10px;
+  padding: 4px 8px 10px;
 }
 
 .nearby-row {
   position: relative;
-
   display: flex;
   align-items: center;
   gap: 8px;
-
   border-radius: var(--radius-md);
   transition: background 120ms ease;
 }
@@ -123,15 +112,12 @@
 .nearby-main {
   flex: 1;
   min-width: 0;
-
   display: flex;
   align-items: center;
   gap: 12px;
-
   border: none;
   background: transparent;
   color: inherit;
-
   padding: 10px 12px;
   cursor: pointer;
   text-align: left;
@@ -139,28 +125,26 @@
 }
 
 .nearby-avatar {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
   flex-shrink: 0;
-
   display: flex;
   align-items: center;
   justify-content: center;
-
   border-radius: 50%;
   font-size: 1.2rem;
   line-height: 1;
-
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(35, 165, 90, 0.28);
-  box-shadow: 0 0 0 1px rgba(35, 165, 90, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--signal) 45%, transparent);
+  box-shadow: 0 0 0 3px var(--signal-dim), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   cursor: pointer;
+  transition: background 120ms ease, transform 140ms var(--ease);
 }
 
 .nearby-avatar:hover {
   background: var(--surface-hover);
+  transform: scale(1.06);
 }
 
 .nearby-info {
@@ -174,7 +158,6 @@
   font-size: 0.94rem;
   font-weight: 600;
   color: var(--ink);
-
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -186,14 +169,13 @@
 }
 
 .nearby-online-dot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   flex-shrink: 0;
   margin-right: 12px;
-
   border-radius: 50%;
   background: var(--signal);
-  box-shadow: 0 0 8px rgba(35, 165, 90, 0.5);
+  box-shadow: 0 0 0 3px var(--signal-dim);
 }
 
 .nearby-empty {
@@ -208,17 +190,17 @@
   top: calc(100% + 4px);
   left: 12px;
   z-index: 50;
-
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 6px;
-
   padding: 10px;
-
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--menu-bg);
   border: 1px solid var(--line-strong);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  animation: menu-in 120ms var(--ease);
 }
 
 .nearby-emoji-option {
@@ -226,16 +208,15 @@
   place-items: center;
   width: 28px;
   height: 28px;
-
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-
   font-size: 1.05rem;
   cursor: pointer;
-  transition: background 120ms ease;
+  transition: background 100ms ease, transform 100ms var(--ease);
 }
 
 .nearby-emoji-option:hover {
-  background: var(--surface);
+  background: var(--surface-hover);
+  transform: scale(1.15);
 }

@@ -497,7 +497,19 @@ useEffect(() => {
     cancelled = true;
   };
 }, [currentAppIcon.src]);
+    // Применяем тему к <html> и следим за системной темой
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => setSystemTheme(mq.matches ? "light" : "dark");
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    const platform = /mac/i.test(navigator.platform) ? "mac" : "win";
+    document.documentElement.classList.add(`platform-${platform}`);
+  }, [resolvedTheme]);
   // Подписка на живые события бэкенда (новые сообщения, изменения чатов,
   // появление/исчезновение людей в сети и т.д.). Без этого UI показывал бы
   // только то, что было на момент первого bootstrap-запроса.
