@@ -74,6 +74,7 @@ func main() {
 	mux.HandleFunc("/api/bootstrap", srv.handleBootstrap)
 	mux.HandleFunc("/api/profile", srv.handleProfile)
 	mux.HandleFunc("/api/events", srv.handleEvents)
+	mux.HandleFunc("/api/errors/report", srv.handleErrorReport)
 	mux.HandleFunc("/api/chats/open", srv.handleOpenChat)
 	mux.HandleFunc("/api/chats/read", srv.handleReadChat)
 	mux.HandleFunc("/api/chats/history", srv.handleClearChatHistory)
@@ -173,6 +174,25 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
 	})
+}
+
+func (s *server) handleErrorReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Error string `json:"error"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.service.ReportError(req.Error); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {

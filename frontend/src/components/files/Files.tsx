@@ -9,6 +9,7 @@ import { pasteAll } from "../../files/paste";
 import { canDo, sameUser, type Me } from "../../files/perm";
 import { NO_SELECTION, type Selection } from "../../files/selection";
 import type { ConflictPolicy, FileEntry } from "../../files/types";
+
 import {
   MIN_EXPLORER_WIDTH,
   SECTION_TITLES,
@@ -41,6 +42,7 @@ import { FilesMenu, type MenuItem } from "./FilesMenu";
 import { PermissionsDialog } from "./PermissionsDialog";
 import { SearchBar, type SendTarget } from "./SearchBar";
 import { TransferPanel } from "./TransferPanel";
+import { WorkspacePanel, WorkspaceIcon } from "./WorkspacePanel";
 import "./files.css";
 
 const MIN_PANE_WIDTH = 150;
@@ -94,6 +96,7 @@ export function Files() {
   const [dropHover, setDropHover] = useState<DropHover | null>(null);
   const [reveal, setReveal] = useState<RevealRequest | null>(null);
   const [search, setSearch] = useState<SearchState>({ open: false, mode: "search", target: null, token: 0 });
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   // Набор избранного нужен пунктам «Добавить / Убрать из избранного» во всех разделах.
   useEffect(() => {
@@ -655,9 +658,18 @@ export function Files() {
             onReveal={revealEntry}
             notify={notify}
           />
+          <button
+  type="button"
+  className={`fx-workspace-open${workspaceOpen ? " active" : ""}`}
+  onClick={() => setWorkspaceOpen((v) => !v)}
+>
+  <WorkspaceIcon size={16} />
+  {workspaceOpen ? "Файлы" : "Рабочая область"}
+</button>
         </div>
 
         <div className="fx-main">
+          {workspaceOpen ? <WorkspacePanel onClose={() => setWorkspaceOpen(false)} notify={notify} /> : <>
           <div className={`fx-explorer ${full ? "full" : "sized"}`} style={full ? undefined : { width }}>
             <Explorer paneId={null} ui={ui} update={update} />
             <div
@@ -723,6 +735,7 @@ export function Files() {
               )}
             </div>
           )}
+          </>}
         </div>
 
         <TransferPanel

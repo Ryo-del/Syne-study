@@ -82,6 +82,11 @@ func (n *Node) SyncLogout(ctx context.Context, serverAddr, sessionID string) err
 	_, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpLogout, SessionID: sessionID})
 	return err
 }
+
+func (n *Node) ErrorReport(ctx context.Context, serverAddr, sessionID, message string) error {
+	_, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: "error_report", SessionID: sessionID, Data: []byte(message)})
+	return err
+}
 func (n *Node) GroupList(ctx context.Context, serverAddr, sessionID string) ([]protocol.GroupInfo, error) {
 	resp, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpGroupList, SessionID: sessionID})
 	if err != nil {

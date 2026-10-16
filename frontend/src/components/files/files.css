@@ -964,3 +964,454 @@
   font-size: 0.72rem;
   color: var(--ink-muted);
 }
+/* ─── Workspace: кнопка в верхней панели ─── */
+
+.fx-workspace-open {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin-left: 8px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.fx-workspace-open:hover {
+  background: var(--surface-hover);
+}
+.fx-workspace-open.active {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+/* ─── Workspace: панель ─── */
+
+.fx-ws {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 24px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+}
+
+/* кнопки */
+.fx-ws-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms var(--ease), filter 120ms ease;
+}
+.fx-ws-btn svg {
+  flex: none;
+}
+.fx-ws-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+}
+.fx-ws-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.fx-ws-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.fx-ws-btn.icon {
+  width: 34px;
+  padding: 0;
+}
+.fx-ws-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-secondary);
+}
+.fx-ws-btn.ghost:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--ink);
+}
+.fx-ws-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 18px var(--accent-dim);
+}
+.fx-ws-btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+.fx-ws-btn.accent {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+.fx-ws-btn.accent:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* счётчик в кнопке */
+.fx-ws-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.fx-ws-btn.accent .fx-ws-count {
+  background: var(--accent);
+  color: #fff;
+}
+.fx-ws-count.muted {
+  background: var(--surface);
+  color: var(--ink-secondary);
+  border: 1px solid var(--line);
+}
+
+/* шапка */
+.fx-ws-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  flex: none;
+}
+.fx-ws-title-block {
+  min-width: 0;
+  flex: 1 1 280px;
+}
+.fx-ws-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.fx-ws-title-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.fx-ws-title-row h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.fx-ws-path {
+  margin-top: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  color: var(--ink-muted);
+}
+.fx-ws-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* статус-пилюля */
+.fx-ws-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  border: 1px solid var(--line);
+}
+.fx-ws-pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+.fx-ws-pill.ok { background: var(--signal-dim); color: var(--signal); border-color: color-mix(in srgb, var(--signal) 28%, transparent); }
+.fx-ws-pill.ok i { background: var(--signal); }
+.fx-ws-pill.warn { background: var(--orange-dim); color: var(--orange); border-color: color-mix(in srgb, var(--orange) 28%, transparent); }
+.fx-ws-pill.warn i { background: var(--orange); }
+.fx-ws-pill.danger { background: var(--danger-dim); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 28%, transparent); }
+.fx-ws-pill.danger i { background: var(--danger); }
+.fx-ws-pill.busy { background: var(--accent-dim); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+.fx-ws-pill.busy i { background: var(--accent); animation: fx-ws-pulse 1s ease-in-out infinite; }
+@keyframes fx-ws-pulse {
+  50% { opacity: 0.3; transform: scale(0.8); }
+}
+
+/* панель навигации */
+.fx-ws-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  flex: none;
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-secondary);
+}
+.fx-ws-segment {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  border: 1px solid var(--line);
+}
+.fx-ws-segment button {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 9px;
+  color: var(--ink-secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease;
+}
+.fx-ws-segment button:hover {
+  color: var(--ink);
+}
+.fx-ws-segment button.active {
+  background: var(--surface-active);
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+.fx-ws-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 160px;
+  min-width: 0;
+  color: var(--ink-secondary);
+  font-size: 0.86rem;
+}
+.fx-ws-crumb svg {
+  flex: none;
+  color: var(--ink-muted);
+}
+.fx-ws-crumb span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+}
+.fx-ws-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* список */
+.fx-ws-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-secondary);
+}
+.fx-ws-empty {
+  padding: 40px 12px;
+  text-align: center;
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+}
+.fx-ws-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 10px;
+  transition: background 100ms ease;
+}
+.fx-ws-row:hover {
+  background: var(--surface);
+}
+.fx-ws-row.sel {
+  background: var(--accent-dim);
+}
+.fx-ws-row.denied {
+  opacity: 0.6;
+}
+.fx-ws-row input {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.fx-ws-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  text-align: left;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+.fx-ws-name:disabled {
+  cursor: default;
+}
+.fx-ws-ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.fx-ws-ico img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+.fx-ws-ico.dir { color: var(--accent); }
+.fx-ws-ico.file { color: var(--ink-muted); }
+.fx-ws-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-ws-meta {
+  flex: none;
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+}
+.fx-ws-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--danger-dim);
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.fx-ws-chev {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex: none;
+  color: var(--ink-muted);
+}
+.fx-ws-chev.none {
+  visibility: hidden;
+}
+
+/* ошибки */
+.fx-ws-errors {
+  flex: none;
+  max-height: 110px;
+  overflow: auto;
+  padding: 10px 14px 10px 28px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  background: var(--danger-dim);
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+/* состояние файлов */
+.fx-ws-changes {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 190px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-secondary);
+}
+.fx-ws-changes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+.fx-ws-changes-empty {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+.fx-ws-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+}
+.fx-ws-change {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 0.82rem;
+}
+.fx-ws-change-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-secondary);
+}
+.fx-ws-badge {
+  flex: none;
+  min-width: 68px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: var(--surface);
+  color: var(--ink-secondary);
+}
+.fx-ws-badge.new { background: var(--signal-dim); color: var(--signal); }
+.fx-ws-badge.mod { background: var(--orange-dim); color: var(--orange); }
+.fx-ws-badge.del { background: var(--danger-dim); color: var(--danger); }

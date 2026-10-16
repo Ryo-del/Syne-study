@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
-    io::Write,
+    collections::BTreeMap,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -64,6 +67,419 @@ fn open_with_dialog(path: String) -> Result<(), String> {
         return Err("only files downloaded for opening can be opened".to_string());
     }
     spawn_open_as(Path::new(&path))
+}
+
+fn workspace_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .map_err(|e| format!("cannot locate Desktop: {e}"))?;
+    let path = desktop.join("workspace");
+    std::fs::create_dir_all(&path).map_err(|e| format!("cannot create workspace: {e}"))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve workspace: {e}"))?;
+    let desktop = desktop
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve Desktop: {e}"))?;
+    if !canonical.starts_with(&desktop) || canonical.parent() != Some(desktop.as_path()) {
+        return Err("workspace must be a direct child of Desktop".into());
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+fn get_workspace_dir(app: AppHandle) -> Result<String, String> {
+    workspace_dir(&app)?
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "workspace path is not valid UTF-8".into())
+}
+
+fn checked_workspace_relative(relative: &str) -> Result<PathBuf, String> {
+    let rel = Path::new(relative);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("invalid workspace relative path".into());
+    }
+    Ok(rel.to_path_buf())
+}
+
+#[tauri::command]
+fn workspace_subdir(app: AppHandle, relative: String) -> Result<String, String> {
+    let root = workspace_dir(&app)?;
+    let rel = checked_workspace_relative(&relative)?;
+    let mut target = root.clone();
+    for component in rel.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err("invalid workspace relative path".into());
+        };
+        target.push(name);
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                return Err("workspace path contains a symlink or non-folder".into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&target)
+                    .map_err(|e| format!("cannot create workspace folder: {e}"))?;
+            }
+            Err(error) => return Err(format!("cannot inspect workspace path: {error}")),
+        }
+    }
+    let canonical = target
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve workspace folder: {e}"))?;
+    if !canonical.starts_with(&root) {
+        return Err("workspace path escapes its root".into());
+    }
+    canonical
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "workspace path is not valid UTF-8".into())
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::{checked_workspace_file, checked_workspace_relative};
+    use std::{fs, path::PathBuf};
+
+    #[test]
+    fn accepts_nested_unicode_relative_paths() {
+        assert!(checked_workspace_relative("Документы/проект/file.txt").is_ok());
+    }
+
+    #[test]
+    fn rejects_parent_and_absolute_paths() {
+        assert!(checked_workspace_relative("../outside.txt").is_err());
+        assert!(checked_workspace_relative("/tmp/outside.txt").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_inside_workspace() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("syne-workspace-test-{}", std::process::id()));
+        let outside =
+            std::env::temp_dir().join(format!("syne-workspace-outside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&outside, b"test").unwrap();
+        symlink(&outside, root.join("link.txt")).unwrap();
+        assert!(checked_workspace_file(&root, "link.txt").is_err());
+        fs::remove_dir_all(PathBuf::from(root)).unwrap();
+        fs::remove_file(outside).unwrap();
+    }
+}
+
+fn checked_workspace_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let rel = checked_workspace_relative(relative)?;
+    let mut path = root.to_path_buf();
+    let components: Vec<_> = rel.components().collect();
+    for (index, component) in components.iter().enumerate() {
+        let std::path::Component::Normal(name) = component else {
+            return Err("invalid workspace relative path".into());
+        };
+        path.push(name);
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("cannot inspect workspace file: {e}"))?;
+        if meta.file_type().is_symlink() {
+            return Err("workspace file path contains a symlink".into());
+        }
+        if index + 1 == components.len() {
+            if !meta.is_file() {
+                return Err("workspace path is not a regular file".into());
+            }
+        } else if !meta.is_dir() {
+            return Err("workspace file parent is not a folder".into());
+        }
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn workspace_file_path(app: AppHandle, relative: String) -> Result<String, String> {
+    let root = workspace_dir(&app)?;
+    let file = checked_workspace_file(&root, &relative)?;
+    file.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "workspace path is not valid UTF-8".into())
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct WorkspaceManifest {
+    #[serde(default)]
+    files: BTreeMap<String, WorkspaceFileState>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct WorkspaceFileState {
+    digest: String,
+    target_path: String,
+    base_mod_time: i64,
+}
+
+#[derive(Serialize)]
+struct WorkspaceChange {
+    path: String,
+    status: String,
+    bytes: u64,
+    digest: String,
+    target_path: String,
+    base_mod_time: i64,
+}
+
+#[derive(Serialize)]
+struct WorkspaceDiff {
+    changes: Vec<WorkspaceChange>,
+}
+
+fn workspace_manifest_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot locate app data: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create app data: {e}"))?;
+    Ok(dir.join("workspace-manifest.json"))
+}
+
+fn read_workspace_manifest(app: &AppHandle) -> Result<WorkspaceManifest, String> {
+    let path = workspace_manifest_path(app)?;
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("workspace manifest is invalid: {e}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(WorkspaceManifest::default())
+        }
+        Err(error) => Err(format!("cannot read workspace manifest: {error}")),
+    }
+}
+
+fn write_workspace_manifest(app: &AppHandle, manifest: &WorkspaceManifest) -> Result<(), String> {
+    let path = workspace_manifest_path(app)?;
+    let temp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec(manifest).map_err(|e| e.to_string())?;
+    std::fs::write(&temp, bytes).map_err(|e| format!("cannot write workspace manifest: {e}"))?;
+    #[cfg(not(target_os = "windows"))]
+    std::fs::rename(&temp, &path).map_err(|e| format!("cannot save workspace manifest: {e}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        let backup = path.with_extension("json.bak");
+        if backup.exists() {
+            std::fs::remove_file(&backup)
+                .map_err(|e| format!("cannot replace workspace manifest: {e}"))?;
+        }
+        let had_old = path.exists();
+        if had_old {
+            std::fs::rename(&path, &backup)
+                .map_err(|e| format!("cannot stage workspace manifest: {e}"))?;
+        }
+        if let Err(error) = std::fs::rename(&temp, &path) {
+            if had_old {
+                let _ = std::fs::rename(&backup, &path);
+            }
+            return Err(format!("cannot save workspace manifest: {error}"));
+        }
+        if had_old {
+            let _ = std::fs::remove_file(backup);
+        }
+    }
+    Ok(())
+}
+
+fn workspace_file_digest(path: &Path) -> Result<String, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("cannot open workspace file: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("cannot read workspace file: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn scan_workspace(
+    root: &Path,
+    dir: &Path,
+    current: &mut BTreeMap<String, (u64, String)>,
+) -> Result<(), String> {
+    for item in std::fs::read_dir(dir).map_err(|e| format!("cannot scan workspace: {e}"))? {
+        let item = item.map_err(|e| e.to_string())?;
+        let name = item.file_name().to_string_lossy().to_lowercase();
+        if matches!(
+            name.as_str(),
+            ".ds_store"
+                | ".appledouble"
+                | "__macosx"
+                | "thumbs.db"
+                | "desktop.ini"
+                | ".spotlight-v100"
+                | ".trashes"
+                | ".fseventsd"
+                | ".temporaryitems"
+                | ".documentrevisions-v100"
+        ) || name.starts_with("._")
+        {
+            continue;
+        }
+        let path = item.path();
+        let kind = item.file_type().map_err(|e| e.to_string())?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            scan_workspace(root, &path, current)?;
+        } else if kind.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let size = item.metadata().map_err(|e| e.to_string())?.len();
+            current.insert(relative, (size, workspace_file_digest(&path)?));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn record_workspace_file(
+    app: AppHandle,
+    path: String,
+    target_path: String,
+    base_mod_time: i64,
+) -> Result<(), String> {
+    let root = workspace_dir(&app)?;
+    let file = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve downloaded file: {e}"))?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err("downloaded file is outside workspace".into());
+    }
+    let relative = file
+        .strip_prefix(&root)
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut manifest = read_workspace_manifest(&app)?;
+    manifest.files.insert(
+        relative,
+        WorkspaceFileState {
+            digest: workspace_file_digest(&file)?,
+            target_path,
+            base_mod_time,
+        },
+    );
+    write_workspace_manifest(&app, &manifest)
+}
+
+#[tauri::command]
+fn workspace_diff(app: AppHandle) -> Result<WorkspaceDiff, String> {
+    let root = workspace_dir(&app)?;
+    let mut current = BTreeMap::new();
+    scan_workspace(&root, &root, &mut current)?;
+    let manifest = read_workspace_manifest(&app)?;
+    let mut changes = Vec::new();
+    for (path, (bytes, digest)) in current {
+        let state = manifest.files.get(&path);
+        let status = match state {
+            None => "Новый",
+            Some(previous) if previous.digest != digest => "Изменён",
+            Some(_) => continue,
+        };
+        let (target_path, base_mod_time) = state
+            .map(|s| (s.target_path.clone(), s.base_mod_time))
+            .unwrap_or_else(|| (path.clone(), 0));
+        changes.push(WorkspaceChange {
+            path,
+            status: status.into(),
+            bytes,
+            digest,
+            target_path,
+            base_mod_time,
+        });
+    }
+    for path in manifest.files.keys() {
+        let rel = match checked_workspace_relative(path) {
+            Ok(rel) => rel,
+            Err(_) => continue,
+        };
+        if !root.join(rel).exists() {
+            changes.push(WorkspaceChange {
+                path: path.clone(),
+                status: "Удалён локально (сервер не затронут)".into(),
+                bytes: 0,
+                digest: String::new(),
+                target_path: String::new(),
+                base_mod_time: 0,
+            });
+        }
+    }
+    Ok(WorkspaceDiff { changes })
+}
+
+#[tauri::command]
+fn mark_workspace_uploaded(
+    app: AppHandle,
+    relative: String,
+    digest: String,
+    target_path: String,
+    base_mod_time: i64,
+) -> Result<(), String> {
+    let root = workspace_dir(&app)?;
+    let file = checked_workspace_file(&root, &relative)?;
+    let current = workspace_file_digest(&file)?;
+    if current != digest {
+        return Err("workspace file changed while uploading".into());
+    }
+    let mut manifest = read_workspace_manifest(&app)?;
+    manifest.files.insert(
+        relative,
+        WorkspaceFileState {
+            digest,
+            target_path,
+            base_mod_time,
+        },
+    );
+    write_workspace_manifest(&app, &manifest)
+}
+
+#[tauri::command]
+fn open_workspace(app: AppHandle, vscode: bool) -> Result<(), String> {
+    let path = workspace_dir(&app)?;
+    #[cfg(target_os = "windows")]
+    let (program, args): (&str, Vec<String>) = if vscode {
+        ("code", vec![path.to_string_lossy().into_owned()])
+    } else {
+        ("explorer.exe", vec![path.to_string_lossy().into_owned()])
+    };
+    #[cfg(target_os = "macos")]
+    let (program, args): (&str, Vec<String>) = if vscode {
+        ("code", vec![path.to_string_lossy().into_owned()])
+    } else {
+        ("open", vec![path.to_string_lossy().into_owned()])
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let (program, args): (&str, Vec<String>) = if vscode {
+        ("code", vec![path.to_string_lossy().into_owned()])
+    } else {
+        ("xdg-open", vec![path.to_string_lossy().into_owned()])
+    };
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot open workspace: {e}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -158,14 +574,23 @@ fn resolve_server_addr(app: &AppHandle) -> Option<String> {
     for candidate in candidates {
         match read_first_line(&candidate) {
             Some(addr) => {
-                log_line(app, &format!("server override: {} -> {addr}", candidate.display()));
+                log_line(
+                    app,
+                    &format!("server override: {} -> {addr}", candidate.display()),
+                );
                 return Some(addr);
             }
-            None => log_line(app, &format!("server override: not found/empty: {}", candidate.display())),
+            None => log_line(
+                app,
+                &format!("server override: not found/empty: {}", candidate.display()),
+            ),
         }
     }
 
-    log_line(app, "no client-config.txt found, backend will auto-discover the study server");
+    log_line(
+        app,
+        "no client-config.txt found, backend will auto-discover the study server",
+    );
     None
 }
 #[cfg(target_os = "macos")]
@@ -268,8 +693,6 @@ fn backend_workdir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-
-
 fn spawn_backend(app: &AppHandle, token: &str) -> Result<CommandChild, String> {
     let workdir = backend_workdir(app)?;
     let workdir_str = workdir
@@ -332,7 +755,14 @@ fn main() {
             backend_token,
             set_app_icon,
             open_temp_dir,
-            open_with_dialog
+            open_with_dialog,
+            get_workspace_dir,
+            workspace_subdir,
+            workspace_file_path,
+            record_workspace_file,
+            workspace_diff,
+            mark_workspace_uploaded,
+            open_workspace
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -353,7 +783,13 @@ fn main() {
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             // sidecar не должен пережить приложение: его токен действует один запуск
-            if let Some(child) = app_handle.state::<BackendState>().child.lock().unwrap().take() {
+            if let Some(child) = app_handle
+                .state::<BackendState>()
+                .child
+                .lock()
+                .unwrap()
+                .take()
+            {
                 let _ = child.kill();
             }
         }

@@ -207,6 +207,7 @@ export const filesApi = {
     path: string;
     local_paths: string[];
     on_conflict?: ConflictPolicy;
+    base_mod_time?: number;
     files_only?: boolean;
     transfer_id?: string;
   }) {

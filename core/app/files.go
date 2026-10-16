@@ -314,12 +314,13 @@ func localCandidate(dir, name string, i int) string {
 // ---------- загрузка с диска (перетаскивание) ----------
 
 type UploadRequest struct {
-	Owner      string   `json:"owner"`
-	Path       string   `json:"path"`        // папка назначения на сервере
-	LocalPaths []string `json:"local_paths"` // файлы и папки с ПК (абсолютные пути)
-	OnConflict string   `json:"on_conflict"` // "" — спросить, rename | replace | skip
-	TransferID string   `json:"transfer_id"`
-	FilesOnly  bool     `json:"files_only"`
+	Owner       string   `json:"owner"`
+	Path        string   `json:"path"`        // папка назначения на сервере
+	LocalPaths  []string `json:"local_paths"` // файлы и папки с ПК (абсолютные пути)
+	OnConflict  string   `json:"on_conflict"` // "" — спросить, rename | replace | skip
+	BaseModTime int64    `json:"base_mod_time"`
+	TransferID  string   `json:"transfer_id"`
+	FilesOnly   bool     `json:"files_only"`
 }
 
 type UploadFailure struct {
@@ -597,6 +598,7 @@ func (s *Service) FilesUploadFromDisk(ctx context.Context, u UploadRequest) (Upl
 		req := protocol.FilesRequest{
 			Op: protocol.FilesOpUpload, SessionID: sess.SessionID, Owner: u.Owner,
 			Path: parentRemote, Name: name, Size: size, OnConflict: policy,
+			BaseModTime: u.BaseModTime,
 		}
 		base := done
 		resp, err := s.node.FilesUpload(ctx, addr, req, f,
