@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { iconUrl } from "../../files/icons";
 
 interface Props {
   disabled: boolean;
@@ -47,14 +48,17 @@ export default function AttachMenu({ disabled, onPickPhoto, onPickFile, onPickFr
       </button>
       {open && (
         <div className="attach-menu" role="menu">
-          <button type="button" className="attach-item" onClick={run(onPickPhoto)}>
-            🖼 Фото с компьютера
+          <button type="button" className="attach-item" role="menuitem" onClick={run(onPickPhoto)}>
+            <img className="attach-item-icon" src={iconUrl("photo.png", false)} alt="" draggable={false} />
+            <span>Фото с компьютера</span>
           </button>
-          <button type="button" className="attach-item" onClick={run(onPickFile)}>
-            📄 Файл с компьютера
+          <button type="button" className="attach-item" role="menuitem" onClick={run(onPickFile)}>
+            <img className="attach-item-icon" src={iconUrl("file.txt", false)} alt="" draggable={false} />
+            <span>Файл с компьютера</span>
           </button>
-          <button type="button" className="attach-item" onClick={run(onPickFromFiles)}>
-            🗂 Из Files
+          <button type="button" className="attach-item" role="menuitem" onClick={run(onPickFromFiles)}>
+            <img className="attach-item-icon" src={iconUrl("folder", true)} alt="" draggable={false} />
+            <span>Из Files</span>
           </button>
         </div>
       )}

@@ -767,17 +767,18 @@ select:focus-visible {
 
 .msg-content {
   display: flex;
+  flex-direction: column;
   max-width: min(72%, 640px);
+  min-width: 0;
 }
 
 .msg-content.outgoing {
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .msg-content.incoming {
-  justify-content: flex-start;
+  align-items: flex-start;
 }
-
 .msg-bubble {
   display: flex;
   flex-direction: column;
@@ -787,6 +788,10 @@ select:focus-visible {
   border-radius: 18px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
   border: 1px solid var(--line);
+}
+.msg-bubble.media {
+  padding: 4px 4px 8px;
+  max-width: 100%;
 }
 
 .msg-bubble.incoming {
@@ -840,22 +845,23 @@ select:focus-visible {
 
 .composer-input-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
 }
 
 .composer textarea {
   flex: 1;
+  height: 46px;
   min-height: 46px;
   max-height: 132px;
-  padding: 13px 18px;
-  border-radius: 24px;
+  padding: 12px 18px;
+  border-radius: 23px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink);
   font-size: 0.93rem;
   resize: none;
-  line-height: 1.45;
+  line-height: 1.4;
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
@@ -1989,14 +1995,15 @@ select:focus-visible {
 }
 
 .attach-btn {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   display: grid;
   place-items: center;
   border-radius: 50%;
   color: var(--ink-secondary);
   transition: background 120ms ease, color 120ms ease;
 }
+
 
 .attach-btn:hover:not(:disabled) {
   background: var(--surface);
@@ -2027,7 +2034,7 @@ select:focus-visible {
 .attach-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
   padding: 9px 12px;
   border-radius: 10px;
@@ -2036,7 +2043,11 @@ select:focus-visible {
   font-size: 0.88rem;
   transition: background 100ms ease;
 }
-
+.attach-item-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
 .attach-item:hover {
   background: var(--surface-hover);
 }
@@ -2068,10 +2079,12 @@ select:focus-visible {
 
 .chat-photo {
   display: block;
-  max-width: min(100%, 360px);
+  width: auto;
+  height: auto;
+  max-width: min(360px, 55vw);
   max-height: 360px;
   border-radius: 14px;
-  object-fit: contain;
+  object-fit: cover;
   background: var(--field-bg);
   cursor: zoom-in;
 }
