@@ -6,6 +6,7 @@ import { filesApi, newTransferId } from "../../files/api";
 import { describeFileError } from "../../files/errors";
 import { baseName, isJunkName } from "../../files/hidden";
 import { pasteAll } from "../../files/paste";
+import { ApiError } from "../../lib/api";
 import { canDo, sameUser, type Me } from "../../files/perm";
 import { NO_SELECTION, type Selection } from "../../files/selection";
 import type { ConflictPolicy, FileEntry } from "../../files/types";
@@ -393,6 +394,50 @@ export function Files() {
     }
     if (!entries.every((e) => canDo(me, kind, e, "copy"))) {
       notify("Нельзя: нет права «копирование» у источника");
+      return;
+    }
+    // В «Мою папку» drag-and-drop означает перенос. Сначала копируем каждый
+    // элемент, затем удаляем источник только если сервер действительно создал копию.
+    const moving =
+      kind === "mine" &&
+      hover.owner === "" &&
+      entries.every((e) => apiOwner(kind, e) === "" && canDo(me, kind, e, "delete"));
+    if (moving) {
+      let policy: ConflictPolicy | undefined;
+      let skipped = 0;
+      for (const entry of entries) {
+        const parentPath = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "";
+        if (hover.owner === apiOwner(kind, entry) && hover.path === parentPath) continue;
+        try {
+          let result: Awaited<ReturnType<typeof filesApi.paste>>;
+          try {
+            result = await filesApi.paste(
+              { owner: apiOwner(kind, entry), path: entry.path },
+              { owner: hover.owner, path: hover.path },
+              policy,
+            );
+          } catch (err) {
+            if (!(err instanceof ApiError && err.code === "exists") || policy) throw err;
+            const selected = await new Promise<ConflictPolicy | null>((resolve) =>
+              setConflict({ name: entry.name, resolve }),
+            );
+            if (!selected) break;
+            policy = selected;
+            result = await filesApi.paste(
+              { owner: apiOwner(kind, entry), path: entry.path },
+              { owner: hover.owner, path: hover.path },
+              policy,
+            );
+          }
+          skipped += result.skipped;
+          if (result.entry && result.skipped === 0) await filesApi.remove(apiOwner(kind, entry), entry.path);
+        } catch (err) {
+          notify(describeFileError(err));
+          break;
+        }
+      }
+      setRefreshSignal((n) => n + 1);
+      if (skipped > 0) notify(`Пропущено элементов: ${skipped}`, "info");
       return;
     }
     const r = await pasteAll(
