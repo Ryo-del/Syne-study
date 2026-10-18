@@ -733,7 +733,7 @@ export function Files() {
             >
               {ui.panes.length === 0 ? (
                 <div className="fx-workspace-hint">
-                  Пустое место. Откройте .txt двойным кликом или перетащите сюда раздел за заголовок.
+                  Пустое место. Откройте текстовый файл двойным кликом или перетащите сюда раздел за заголовок.
                 </div>
               ) : (
                 ui.panes.map((p, i) => {
@@ -824,7 +824,10 @@ export function Files() {
             name={perm.name}
             isDir={perm.isDir}
             onClose={() => setPerm(null)}
-            onSaved={() => notify("Права сохранены", "info")}
+            onSaved={() => {
+              setRefreshSignal((n) => n + 1);
+              notify("Права сохранены", "info");
+            }}
           />
         )}
       </div>

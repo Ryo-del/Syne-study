@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { filesApi } from "../../files/api";
 import { describeFileError } from "../../files/errors";
 import { iconUrl } from "../../files/icons";
+import { editorLanguage } from "../../files/textFiles";
 import { monaco } from "../../files/monaco";
 import type { Doc, EditorState } from "../../files/useEditors";
 import { ApiError } from "../../lib/api";
@@ -167,7 +168,7 @@ export function EditorPane({ paneId, state, focused, onFocus, onActivate, onClos
 
     for (const doc of state.docs) {
       if (models.current.has(doc.key)) continue;
-      const model = monaco.editor.createModel(doc.text, "plaintext");
+      const model = monaco.editor.createModel(doc.text, editorLanguage(doc.name));
       const entry: ModelEntry = { model, savedVersion: model.getAlternativeVersionId() };
       model.onDidChangeContent(() => {
         const dirty = model.getAlternativeVersionId() !== entry.savedVersion;
@@ -260,7 +261,7 @@ export function EditorPane({ paneId, state, focused, onFocus, onActivate, onClos
       <div ref={hostRef} className="fx-monaco" style={{ display: state.docs.length > 0 ? undefined : "none" }} />
       {state.docs.length === 0 && (
         <div className="fx-editor-empty" onContextMenu={windowMenu}>
-          Откройте .txt файл двойным кликом
+          Откройте текстовый файл двойным кликом
         </div>
       )}
     </div>

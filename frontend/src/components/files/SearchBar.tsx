@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { filesApi } from "../../files/api";
+import { isEditableTextFile } from "../../files/textFiles";
 import { describeFileError } from "../../files/errors";
 import { isJunkName } from "../../files/hidden";
 import { iconUrl } from "../../files/icons";
@@ -27,7 +28,7 @@ interface Props {
   notify: (msg: string, kind?: "info" | "error") => void;
 }
 
-const isTxt = (e: FileEntry) => !e.is_dir && e.name.toLowerCase().endsWith(".txt");
+const isTxt = isEditableTextFile;
 
 export function SearchBar({ open, mode, target, focusToken, onOpen, onClose, onOpenResult, onReveal, notify }: Props) {
   const [query, setQuery] = useState("");

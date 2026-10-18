@@ -5,6 +5,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { filesApi } from "../../files/api";
+import { isEditableTextFile } from "../../files/textFiles";
 import { describeFileError } from "../../files/errors";
 import { formatBytes } from "../../files/format";
 import { iconUrl } from "../../files/icons";
@@ -327,7 +328,7 @@ export function Section({
   }
     function openRow(row: Row) {
     const e = row.entry;
-    if (e.is_dir || !e.name.toLowerCase().endsWith(".txt")) return; // открыть можно только .txt
+    if (!isEditableTextFile(e)) return;
     if (!canDo(ctx.me, id, e, "open")) {
       notify("Нет права на просмотр");
       return;

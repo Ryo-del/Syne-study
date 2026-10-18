@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { downloadAs, downloadToDownloads, openAs } from "../../files/actions";
 import { filesApi } from "../../files/api";
+import { isEditableTextFile } from "../../files/textFiles";
 import { describeFileError } from "../../files/errors";
 import { canDo, sameUser } from "../../files/perm";
 import type { FileAction, FileCap, FileEntry } from "../../files/types";
@@ -31,8 +32,6 @@ function dropNested(list: FileEntry[]): FileEntry[] {
     (a) => !list.some((b) => b !== a && b.is_dir && b.owner === a.owner && a.path.startsWith(`${b.path}/`)),
   );
 }
-
-const isTxt = (e: FileEntry) => !e.is_dir && e.name.toLowerCase().endsWith(".txt");
 
 export function useSectionActions(d: ActionDeps) {
   const ctx = useFilesCtx();
@@ -251,7 +250,7 @@ export function useSectionActions(d: ActionDeps) {
       items.push(
         {
           label: "Открыть",
-          disabled: !(single && isTxt(t) && can(t, "open")),
+          disabled: !(single && isEditableTextFile(t) && can(t, "open")),
           onClick: () => ctx.openFile(t, id, can(t, "edit")),
         },
         {
