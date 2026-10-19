@@ -88,6 +88,8 @@ func main() {
 	mux.HandleFunc("/api/auth/register", srv.handleRegister)
 	mux.HandleFunc("/api/auth/login", srv.handleLogin)
 	mux.HandleFunc("/api/auth/logout", srv.handleLogout)
+	mux.HandleFunc("/api/auth/change-password", srv.handleChangePassword)
+	mux.HandleFunc("/api/settings", srv.handleUserSettings)
 	mux.HandleFunc("/api/directory", srv.handleDirectory)
 	mux.HandleFunc("/api/auth/claim", srv.handleClaim)
 	srv.registerFilesRoutes(mux)
@@ -141,7 +143,7 @@ func withGuard(token string, next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Syne-Token")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

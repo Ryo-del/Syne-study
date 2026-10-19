@@ -7,3 +7,7 @@ export function setSessionLogin(login: string) {
 export function getSessionLogin() {
   return sessionLogin;
 }
+
+export function clearSessionLogin() {
+  sessionLogin = "";
+}

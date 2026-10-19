@@ -1218,6 +1218,23 @@ select:focus-visible {
   letter-spacing: 0;
 }
 
+.settings-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #394150);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--surface, #1a1f2b);
+  font: inherit;
+}
+
+.settings-input:disabled { opacity: .55; }
+.settings-password-form { display: grid; gap: 12px; margin-top: 12px; }
+.settings-form-error { color: #e25b67; font-size: 13px; }
+.settings-form-success { color: #4eaa77; font-size: 13px; }
+.settings-version-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+
 .language-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

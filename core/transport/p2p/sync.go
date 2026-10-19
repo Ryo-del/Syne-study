@@ -56,6 +56,19 @@ func (n *Node) VaultPut(ctx context.Context, serverAddr, sessionID string, data 
 	return err
 }
 
+func (n *Node) UserSettingsGet(ctx context.Context, serverAddr, sessionID string) ([]byte, bool, error) {
+	resp, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpSettingsGet, SessionID: sessionID})
+	if err != nil {
+		return nil, false, err
+	}
+	return resp.Data, resp.Exists, nil
+}
+
+func (n *Node) UserSettingsPut(ctx context.Context, serverAddr, sessionID string, data []byte) error {
+	_, err := n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpSettingsPut, SessionID: sessionID, Data: data})
+	return err
+}
+
 func (n *Node) KeyLookup(ctx context.Context, serverAddr, sessionID, userID string) (*protocol.SyncResponse, error) {
 	return n.syncCall(ctx, serverAddr, protocol.SyncRequest{Type: protocol.SyncOpKeyLookup, SessionID: sessionID, UserID: userID})
 }

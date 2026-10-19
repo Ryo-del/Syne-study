@@ -180,6 +180,10 @@ type Service struct {
 
 	flushMu  sync.Mutex
 	savedVer uint64
+
+	settingsMu      sync.Mutex
+	settingsSession string
+	settingsData    []byte
 }
 
 func New(config Config) (*Service, error) {
@@ -289,6 +293,63 @@ func (s *Service) Logout() error {
 	return s.endSession()
 }
 
+func (s *Service) UserSettings() ([]byte, bool, error) {
+	sess, err := s.currentSession()
+	if err != nil {
+		return nil, false, err
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	defer cancel()
+	data, exists, err := s.node.UserSettingsGet(ctx, s.cfg.ServerAddr, sess.SessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	s.settingsMu.Lock()
+	current, _ := s.currentSession()
+	if current == sess {
+		s.settingsSession = sess.SessionID
+		s.settingsData = append([]byte(nil), data...)
+	}
+	s.settingsMu.Unlock()
+	return data, exists, nil
+}
+
+func (s *Service) SaveUserSettings(data []byte) error {
+	if len(data) == 0 || len(data) > 256*1024 || !json.Valid(data) {
+		return errors.New("invalid settings payload")
+	}
+	sess, err := s.currentSession()
+	if err != nil {
+		return err
+	}
+	s.settingsMu.Lock()
+	s.settingsSession = sess.SessionID
+	s.settingsData = append([]byte(nil), data...)
+	s.settingsMu.Unlock()
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	defer cancel()
+	return s.node.UserSettingsPut(ctx, s.cfg.ServerAddr, sess.SessionID, data)
+}
+
+func (s *Service) ChangePassword(currentPassword, newPassword string) error {
+	if len(newPassword) < 6 {
+		return errors.New("new password must contain at least 6 characters")
+	}
+	for _, r := range newPassword {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return errors.New("new password may contain only Latin letters and digits")
+		}
+	}
+	sess, err := s.currentSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 60*time.Second)
+	defer cancel()
+	return s.node.ChangePassword(ctx, s.cfg.ServerAddr, sess.SessionID, currentPassword, newPassword,
+		sess.MasterKey, sess.IdentityPrivateKey, sess.IdentityPublicKey)
+}
+
 // beginSession: закрывает предыдущую сессию (с выгрузкой её данных), скачивает
 // vault нового пользователя и запускает фоновые циклы.
 func (s *Service) beginSession(login string, r *p2ptransport.LoginResult) error {
@@ -353,6 +414,13 @@ func (s *Service) endSession() error {
 		fmt.Printf("logout: vault upload attempt %d failed: %v\n", attempt+1, flushErr)
 		time.Sleep(500 * time.Millisecond)
 	}
+	if err := s.flushUserSettings(sess); err != nil {
+		if flushErr == nil {
+			flushErr = err
+		} else {
+			flushErr = fmt.Errorf("%v; user settings could not be saved: %w", flushErr, err)
+		}
+	}
 
 	s.dropServerSession(sess)
 	s.resetSessionState()
@@ -370,6 +438,10 @@ func (s *Service) dropServerSession(sess *UserSession) {
 }
 
 func (s *Service) resetSessionState() {
+	s.settingsMu.Lock()
+	s.settingsSession = ""
+	s.settingsData = nil
+	s.settingsMu.Unlock()
 	history.Reset()
 	corechat.Reset()
 	s.stateMu.Lock()
@@ -387,6 +459,19 @@ func (s *Service) resetSessionState() {
 		s.neighbors[id] = n
 	}
 	s.stateMu.Unlock()
+}
+
+func (s *Service) flushUserSettings(sess *UserSession) error {
+	s.settingsMu.Lock()
+	data := append([]byte(nil), s.settingsData...)
+	belongs := s.settingsSession == sess.SessionID
+	s.settingsMu.Unlock()
+	if !belongs || len(data) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return s.node.UserSettingsPut(ctx, s.cfg.ServerAddr, sess.SessionID, data)
 }
 
 // ======================= vault =======================

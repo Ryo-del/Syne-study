@@ -17,6 +17,9 @@ import {
   listenEvents,
   loadBootstrap,
   loadMessages,
+  loadUserSettings,
+  saveUserSettings,
+  changePassword,
   markChatRead,
   openPrivateChat,
   renameContact,
@@ -32,6 +35,7 @@ import {
   invoke,
   isTauri,
 } from "@tauri-apps/api/core";
+import { sendNotification } from "@tauri-apps/plugin-notification";
 
 import type {
   AppEvent,
@@ -45,9 +49,8 @@ import type {
 import {
   APP_ICON_OPTIONS,
   DELETE_HISTORY_HOLD_MS,
-  LANGUAGE_OPTIONS,
-  NOTIFICATION_SOUND_OPTIONS,
-  SETTINGS_SECTIONS,
+  DEFAULT_ACCOUNT_SETTINGS,
+  type AccountSettings,
   type AppIconId,
   type AppLanguage,
   type NotificationSound,
@@ -58,10 +61,6 @@ import {
 
 import { TRANSLATIONS } from "./config/translations";
 import { ensureNotificationPermission, notifyNewMessage } from "./lib/notify";
-import {
-  readStorage,
-  writeStorage,
-} from "./lib/storage";
 
 import {
   describeError,
@@ -105,6 +104,28 @@ const EMPTY_SNAPSHOT: Snapshot = {
   chats: [],
 };
 const LIVE_REFRESH_INTERVAL_MS = 2000;
+function normalizeAccountSettings(raw: Record<string, unknown>): AccountSettings {
+  const sounds = ["chime", "pulse", "soft", "none"];
+  const languages = ["ru", "en", "fr", "de"];
+  const themes = ["system", "light", "dark"];
+  const hours = Number(raw.autoLogoutHours);
+  return {
+    ...DEFAULT_ACCOUNT_SETTINGS,
+    notificationsEnabled: typeof raw.notificationsEnabled === "boolean" ? raw.notificationsEnabled : true,
+    notificationPreview: typeof raw.notificationPreview === "boolean" ? raw.notificationPreview : true,
+    notificationSound: sounds.includes(String(raw.notificationSound)) ? raw.notificationSound as AccountSettings["notificationSound"] : "chime",
+    appLanguage: languages.includes(String(raw.appLanguage)) ? raw.appLanguage as AccountSettings["appLanguage"] : "ru",
+    themePreference: themes.includes(String(raw.themePreference)) ? raw.themePreference as AccountSettings["themePreference"] : "system",
+    autoLogoutEnabled: typeof raw.autoLogoutEnabled === "boolean" ? raw.autoLogoutEnabled : false,
+    autoLogoutHours: Number.isInteger(hours) && hours >= 1 && hours <= 24 ? hours : 1,
+    hiddenChatIds: Array.isArray(raw.hiddenChatIds) ? raw.hiddenChatIds.filter((id): id is string => typeof id === "string") : [],
+    selfEmoji: typeof raw.selfEmoji === "string" ? raw.selfEmoji : "🙂",
+    peerEmojis: raw.peerEmojis && typeof raw.peerEmojis === "object" && !Array.isArray(raw.peerEmojis)
+      ? Object.fromEntries(Object.entries(raw.peerEmojis).filter(([, value]) => typeof value === "string")) as Record<string, string>
+      : {},
+  };
+}
+
 export default function App() {
   const [snapshot, setSnapshot] =
     useState<Snapshot>(EMPTY_SNAPSHOT);
@@ -115,13 +136,7 @@ export default function App() {
   const [messages, setMessages] =
     useState<Record<string, UIMessage[]>>({});
 
-  const [hiddenChatIds, setHiddenChatIds] =
-    useState<string[]>(() =>
-      readStorage(
-        "syne.hidden_chat_ids",
-        [],
-      ),
-    );
+  const [hiddenChatIds, setHiddenChatIds] = useState<string[]>([]);
 
   const [chatContextMenu, setChatContextMenu] =
     useState<{
@@ -188,63 +203,22 @@ export default function App() {
   const [activeSettingsSection, setActiveSettingsSection] =
     useState<SettingsSectionId | null>(null);
 
-  const [themePreference, setThemePreference] =
-    useState<ThemePreference>(() =>
-      readStorage(
-        "syne.theme_preference",
-        "system",
-      ),
-    );
+  const [themePreference, setThemePreference] = useState<ThemePreference>(DEFAULT_ACCOUNT_SETTINGS.themePreference);
 useEffect(() => {
   void ensureNotificationPermission();
 }, []);
-  const [notificationsEnabled, setNotificationsEnabled] =
-    useState(() =>
-      readStorage(
-        "syne.notifications_enabled",
-        true,
-      ),
-    );
+  const [notificationsEnabled, setNotificationsEnabled] = useState(DEFAULT_ACCOUNT_SETTINGS.notificationsEnabled);
 
-  const [notificationPreview, setNotificationPreview] =
-    useState(() =>
-      readStorage(
-        "syne.notification_preview",
-        true,
-      ),
-    );
+  const [notificationPreview, setNotificationPreview] = useState(DEFAULT_ACCOUNT_SETTINGS.notificationPreview);
 
-  const [notificationSound, setNotificationSound] =
-    useState<NotificationSound>(() => {
-      const stored =
-        readStorage<string>(
-          "syne.notification_sound",
-          "chime",
-        );
-
-      return NOTIFICATION_SOUND_OPTIONS.some(
-        (item) => item.id === stored,
-      )
-        ? (stored as NotificationSound)
-        : "chime";
-    });
+  const [notificationSound, setNotificationSound] = useState<NotificationSound>(DEFAULT_ACCOUNT_SETTINGS.notificationSound);
     
-  const [appLanguage, setAppLanguage] =
-    useState<AppLanguage>(() => {
-      const stored =
-        readStorage<string>(
-          "syne.language",
-          "ru",
-        );
-
-      return LANGUAGE_OPTIONS.some(
-        (item) => item.id === stored,
-      )
-        ? (stored as AppLanguage)
-        : "ru";
-    });
-    const notificationsEnabledRef = useRef(notificationsEnabled);
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(DEFAULT_ACCOUNT_SETTINGS.appLanguage);
+  const [autoLogoutEnabled, setAutoLogoutEnabled] = useState(DEFAULT_ACCOUNT_SETTINGS.autoLogoutEnabled);
+  const [autoLogoutHours, setAutoLogoutHours] = useState(DEFAULT_ACCOUNT_SETTINGS.autoLogoutHours);
+const notificationsEnabledRef = useRef(notificationsEnabled);
 const notificationPreviewRef = useRef(notificationPreview);
+const notificationSoundRef = useRef(notificationSound);
 
 useEffect(() => {
   notificationsEnabledRef.current = notificationsEnabled;
@@ -253,20 +227,10 @@ useEffect(() => {
 useEffect(() => {
   notificationPreviewRef.current = notificationPreview;
 }, [notificationPreview]);
-  const [selectedAppIcon, setSelectedAppIcon] =
-    useState<AppIconId>(() => {
-      const stored =
-        readStorage<string>(
-          "syne.app_icon",
-          "blue",
-        );
-
-      return APP_ICON_OPTIONS.some(
-        (item) => item.id === stored,
-      )
-        ? (stored as AppIconId)
-        : "blue";
-    });
+useEffect(() => {
+  notificationSoundRef.current = notificationSound;
+}, [notificationSound]);
+  const [selectedAppIcon, setSelectedAppIcon] = useState<AppIconId>("blue");
 
   const [systemTheme, setSystemTheme] =
     useState<"light" | "dark">(() => {
@@ -284,21 +248,9 @@ useEffect(() => {
   const [emojiPickerTarget, setEmojiPickerTarget] =
     useState<"self" | "peer" | null>(null);
 
-  const [selfEmoji, setSelfEmoji] =
-    useState(() =>
-      readStorage(
-        "syne.self_emoji",
-        "🙂",
-      ),
-    );
+  const [selfEmoji, setSelfEmoji] = useState(DEFAULT_ACCOUNT_SETTINGS.selfEmoji);
 
-  const [peerEmojis, setPeerEmojis] =
-    useState<Record<string, string>>(() =>
-      readStorage(
-        "syne.peer_emojis",
-        {},
-      ),
-    );
+  const [peerEmojis, setPeerEmojis] = useState<Record<string, string>>({});
 
   const [
     showDeleteHistoryConfirm,
@@ -331,6 +283,48 @@ useEffect(() => {
   const deleteHoldStartedAtRef =
     useRef(0);
     const hiddenChatIdsRef = useRef(hiddenChatIds);
+  const settingsRef = useRef<AccountSettings>(DEFAULT_ACCOUNT_SETTINGS);
+  const settingsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionStartedAtRef = useRef(0);
+  const autoLogoutFiredRef = useRef(false);
+
+  useEffect(() => {
+    // Remove account preferences persisted by older builds; new settings live on the server.
+    for (const key of [
+      "syne.theme_preference", "syne.notifications_enabled", "syne.notification_preview",
+      "syne.notification_sound", "syne.language", "syne.app_icon", "syne.hidden_chat_ids",
+      "syne.self_emoji", "syne.peer_emojis",
+    ]) {
+      try { window.localStorage.removeItem(key); } catch { /* storage may be disabled */ }
+    }
+  }, []);
+
+  function applyAccountSettings(next: AccountSettings, persist = false) {
+    settingsRef.current = next;
+    setNotificationsEnabled(next.notificationsEnabled);
+    setNotificationPreview(next.notificationPreview);
+    setNotificationSound(next.notificationSound);
+    setAppLanguage(next.appLanguage);
+    setThemePreference(next.themePreference);
+    setAutoLogoutEnabled(next.autoLogoutEnabled);
+    setAutoLogoutHours(next.autoLogoutHours);
+    setHiddenChatIds(next.hiddenChatIds);
+    hiddenChatIdsRef.current = next.hiddenChatIds;
+    setSelfEmoji(next.selfEmoji);
+    setPeerEmojis(next.peerEmojis);
+    if (persist && authenticated) {
+      const payload = next as unknown as Record<string, unknown>;
+      settingsSaveQueueRef.current = settingsSaveQueueRef.current
+        .catch(() => undefined)
+        .then(() => saveUserSettings(payload))
+        .then(() => undefined)
+        .catch((err) => setError(describeError(err, "Не удалось сохранить настройки на сервере")));
+    }
+  }
+
+  function updateAccountSettings(patch: Partial<AccountSettings>) {
+    applyAccountSettings({ ...settingsRef.current, ...patch }, true);
+  }
 
   useEffect(() => {
     hiddenChatIdsRef.current = hiddenChatIds;
@@ -553,6 +547,7 @@ useEffect(() => {
                 body: attachmentPreview(msg.text),
                 enabled: notificationsEnabledRef.current,
                 preview: notificationPreviewRef.current,
+                sound: notificationSoundRef.current,
               });
             }
           }
@@ -1022,7 +1017,17 @@ async function handleOpenContact(contact: Contact) {
     }
   }
   async function handleLogout() {
+  try {
+    await settingsSaveQueueRef.current;
+    await saveUserSettings(settingsRef.current as unknown as Record<string, unknown>);
+  } catch { /* Go service retries the cached settings during logout. */ }
   try { await logout(); } catch (err) { setError(describeError(err, "Failed to log out")); }
+  sessionStartedAtRef.current = 0;
+  autoLogoutFiredRef.current = false;
+  setShowSettings(false);
+  setActiveSettingsSection(null);
+  setSelectedAppIcon("blue");
+  applyAccountSettings({ ...DEFAULT_ACCOUNT_SETTINGS, hiddenChatIds: [], peerEmojis: {} });
   startTransition(() => {
     clearImageCache();
     setAuthenticated(false);
@@ -1036,6 +1041,46 @@ async function handleOpenContact(contact: Contact) {
     setLoading(true);
   });
 }
+
+  async function handleAuthenticated() {
+    sessionStartedAtRef.current = Date.now();
+    settingsSaveQueueRef.current = Promise.resolve();
+    let next: AccountSettings = { ...DEFAULT_ACCOUNT_SETTINGS, hiddenChatIds: [], peerEmojis: {} };
+    try {
+      next = normalizeAccountSettings(await loadUserSettings());
+    } catch {
+      // Missing or temporarily unavailable remote preferences use clean defaults.
+    }
+    applyAccountSettings(next);
+    setSelectedAppIcon("blue");
+    autoLogoutFiredRef.current = false;
+    setAuthenticated(true);
+    void refreshBootstrap(true).finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!authenticated || !autoLogoutEnabled || sessionStartedAtRef.current === 0) return;
+    const deadline = sessionStartedAtRef.current + autoLogoutHours * 60 * 60 * 1000;
+    const warningDelay = Math.max(0, deadline - 60_000 - Date.now());
+    const logoutDelay = Math.max(0, deadline - Date.now());
+    const warningTimer = window.setTimeout(() => {
+      const message = t("system.autoLogoutWarning");
+      setError(message);
+      setErrorToastKey((key) => key + 1);
+      if (isTauri() && settingsRef.current.notificationsEnabled) {
+        void sendNotification({ title: "Syne", body: message });
+      }
+    }, warningDelay);
+    const logoutTimer = window.setTimeout(() => {
+      if (autoLogoutFiredRef.current) return;
+      autoLogoutFiredRef.current = true;
+      void handleLogout();
+    }, logoutDelay);
+    return () => {
+      window.clearTimeout(warningTimer);
+      window.clearTimeout(logoutTimer);
+    };
+  }, [authenticated, autoLogoutEnabled, autoLogoutHours]);
 
 // выгрузка данных, если окно закрыли без выхода
 useEffect(() => {
@@ -1087,7 +1132,7 @@ useEffect(() => {
         setSelectedChatId("");
         setHiddenChatIds([]);
       });
-      writeStorage("syne.hidden_chat_ids", []);
+      updateAccountSettings({ hiddenChatIds: [] });
       setShowDeleteHistoryConfirm(false);
       setError(t("deleteHistory.deleted"));
       await refreshBootstrap(false);
@@ -1127,8 +1172,7 @@ useEffect(() => {
   
 
   function updateSelfEmoji(nextEmoji: string) {
-    setSelfEmoji(nextEmoji);
-    writeStorage("syne.self_emoji", nextEmoji);
+    updateAccountSettings({ selfEmoji: nextEmoji });
     setEmojiPickerTarget(null);
   }
 
@@ -1136,11 +1180,10 @@ useEffect(() => {
   // и из чата (через updatePeerEmoji ниже), и напрямую из вкладки Nearby.
   function setPeerEmoji(peerId: string, nextEmoji: string) {
     const nextMap = {
-      ...peerEmojis,
+      ...settingsRef.current.peerEmojis,
       [peerId]: nextEmoji,
     };
-    setPeerEmojis(nextMap);
-    writeStorage("syne.peer_emojis", nextMap);
+    updateAccountSettings({ peerEmojis: nextMap });
   }
 
   function updatePeerEmoji(nextEmoji: string) {
@@ -1158,16 +1201,13 @@ useEffect(() => {
   }
 
   function persistHiddenChats(nextIds: string[]) {
-    setHiddenChatIds(nextIds);
-    writeStorage("syne.hidden_chat_ids", nextIds);
+    updateAccountSettings({ hiddenChatIds: nextIds });
   }
     function unhideChat(chatId: string) {
     const current = hiddenChatIdsRef.current;
     if (!current.includes(chatId)) return;
     const next = current.filter((id) => id !== chatId);
-    hiddenChatIdsRef.current = next;
-    setHiddenChatIds(next);
-    writeStorage("syne.hidden_chat_ids", next);
+    updateAccountSettings({ hiddenChatIds: next });
   }
     async function handleDeleteChat(chatId: string) {
     setChatContextMenu(null);
@@ -1250,10 +1290,7 @@ const previousChatIdRef = useRef<string>("");
   if (!authenticated) {
   return (
     <AuthGate
-      onAuthenticated={() => {
-        setAuthenticated(true);
-        void refreshBootstrap(true).finally(() => setLoading(false));
-      }}
+      onAuthenticated={() => { void handleAuthenticated(); }}
     />
   );
 }
@@ -1434,23 +1471,27 @@ const previousChatIdRef = useRef<string>("");
             setActiveSettingsSection
           }
           onNotificationsEnabledChange={
-            setNotificationsEnabled
+            (value) => updateAccountSettings({ notificationsEnabled: value })
           }
           onNotificationPreviewChange={
-            setNotificationPreview
+            (value) => updateAccountSettings({ notificationPreview: value })
           }
           onNotificationSoundChange={
-            setNotificationSound
+            (value) => updateAccountSettings({ notificationSound: value })
           }
           onLanguageChange={
-            setAppLanguage
+            (value) => updateAccountSettings({ appLanguage: value })
           }
           onThemeChange={
-            setThemePreference
+            (value) => updateAccountSettings({ themePreference: value })
           }
           onAppIconChange={
             setSelectedAppIcon
           }
+          autoLogoutEnabled={autoLogoutEnabled}
+          autoLogoutHours={autoLogoutHours}
+          onAutoLogoutEnabledChange={(value) => updateAccountSettings({ autoLogoutEnabled: value })}
+          onAutoLogoutHoursChange={(value) => updateAccountSettings({ autoLogoutHours: value })}
           onOpenDeleteHistoryConfirm={() =>
             setShowDeleteHistoryConfirm(
               true,

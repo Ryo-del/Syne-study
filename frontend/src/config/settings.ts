@@ -42,6 +42,32 @@ export type AppLanguage =
   | "fr"
   | "de";
 
+export interface AccountSettings {
+  notificationsEnabled: boolean;
+  notificationPreview: boolean;
+  notificationSound: NotificationSound;
+  appLanguage: AppLanguage;
+  themePreference: ThemePreference;
+  autoLogoutEnabled: boolean;
+  autoLogoutHours: number;
+  hiddenChatIds: string[];
+  selfEmoji: string;
+  peerEmojis: Record<string, string>;
+}
+
+export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
+  notificationsEnabled: true,
+  notificationPreview: true,
+  notificationSound: "chime",
+  appLanguage: "ru",
+  themePreference: "system",
+  autoLogoutEnabled: false,
+  autoLogoutHours: 1,
+  hiddenChatIds: [],
+  selfEmoji: "🙂",
+  peerEmojis: {},
+};
+
 export const SETTINGS_SECTIONS = [
   {
     id: "notifications",
@@ -62,16 +88,6 @@ export const SETTINGS_SECTIONS = [
     id: "delete-history",
     icon: "🗑️",
     labelKey: "settings.deleteHistory",
-  },
-  {
-    id: "sync-devices",
-    icon: "📱",
-    labelKey: "settings.syncDevices",
-  },
-  {
-    id: "device-key",
-    icon: "🔐",
-    labelKey: "settings.deviceKey",
   },
   {
     id: "system-settings",
@@ -169,15 +185,15 @@ export const LANGUAGE_OPTIONS: Array<{
   },
   {
     id: "en",
-    label: "Английский",
+    label: "English",
   },
   {
     id: "fr",
-    label: "Французский",
+    label: "Français",
   },
   {
     id: "de",
-    label: "Немецкий",
+    label: "Deutsch",
   },
 ];
 

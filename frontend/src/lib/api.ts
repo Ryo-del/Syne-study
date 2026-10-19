@@ -11,6 +11,7 @@ import type {
   Snapshot,
   UIMessage,
 } from "../types";
+import { clearSessionLogin } from "./session";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE?.toString() ?? "http://127.0.0.1:38673";
@@ -75,7 +76,25 @@ function delay(ms: number) {
 }
 
 export function logout() {
-  return request<{ ok: true }>("/api/auth/logout", { method: "POST" });
+  return request<{ ok: true }>("/api/auth/logout", { method: "POST" }).finally(clearSessionLogin);
+}
+
+export function loadUserSettings() {
+  return request<Record<string, unknown>>("/api/settings");
+}
+
+export function saveUserSettings(settings: Record<string, unknown>) {
+  return request<{ ok: true }>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return request<{ ok: true }>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
 }
 
 function isTransientNetworkError(err: unknown) {

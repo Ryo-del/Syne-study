@@ -1,3 +1,4 @@
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   AppIconId,
   AppLanguage,
@@ -13,6 +14,8 @@ import {
   SETTINGS_SECTIONS,
   THEME_OPTIONS,
 } from "../../config/settings";
+import { APP_VERSION } from "../../config/appVersion";
+import { changePassword } from "../../lib/api";
 
 interface SettingsPopoverProps {
   activeSettingsSection:
@@ -33,6 +36,11 @@ interface SettingsPopoverProps {
   selectedAppIcon: AppIconId;
 
   currentAppIcon: (typeof APP_ICON_OPTIONS)[number];
+
+  autoLogoutEnabled: boolean;
+  autoLogoutHours: number;
+  onAutoLogoutEnabledChange: (value: boolean) => void;
+  onAutoLogoutHoursChange: (value: number) => void;
 
   deleteHoldProgress: number;
   deletingHistory: boolean;
@@ -89,6 +97,10 @@ export default function SettingsPopover({
   resolvedTheme,
   selectedAppIcon,
   currentAppIcon,
+  autoLogoutEnabled,
+  autoLogoutHours,
+  onAutoLogoutEnabledChange,
+  onAutoLogoutHoursChange,
   deleteHoldProgress,
   deletingHistory,
   t,
@@ -105,6 +117,51 @@ export default function SettingsPopover({
   onStartDeleteHistoryHold,
   onStopDeleteHistoryHold,
 }: SettingsPopoverProps) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [repeatPassword, setRepeatPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSaved, setPasswordSaved] = useState(false);
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [hoursInput, setHoursInput] = useState(String(autoLogoutHours));
+  const [hoursError, setHoursError] = useState("");
+  const [updateChecked, setUpdateChecked] = useState(false);
+
+  useEffect(() => setHoursInput(String(autoLogoutHours)), [autoLogoutHours]);
+
+  async function submitPassword(event: FormEvent) {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordSaved(false);
+    if (!currentPassword) return setPasswordError(t("system.passwordCurrentRequired"));
+    if (newPassword.length < 6) return setPasswordError(t("system.passwordTooShort"));
+    if (!/^[A-Za-z0-9]+$/.test(newPassword)) return setPasswordError(t("system.passwordCharacters"));
+    if (newPassword !== repeatPassword) return setPasswordError(t("system.passwordMismatch"));
+    setPasswordSaving(true);
+    try {
+      await changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setRepeatPassword("");
+      setPasswordSaved(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message.toLowerCase() : "";
+      setPasswordError(message.includes("invalid current password") ? t("system.passwordCurrentInvalid") : t("system.passwordChangeFailed"));
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
+
+  function commitHours() {
+    const value = Number(hoursInput);
+    if (!Number.isInteger(value) || value < 1 || value > 24) {
+      setHoursError(t("system.autoLogoutValidation"));
+      setHoursInput(String(autoLogoutHours));
+      return;
+    }
+    setHoursError("");
+    onAutoLogoutHoursChange(value);
+  }
   const activeSettingsItem =
     activeSettingsSection
       ? SETTINGS_SECTIONS.find(
@@ -258,7 +315,7 @@ export default function SettingsPopover({
                             sound.id
                           }
                         >
-                          {sound.label}
+                          {t(`sound.${sound.id}`)}
                         </option>
                       ),
                     )}
@@ -351,7 +408,7 @@ export default function SettingsPopover({
                           )
                         }
                       >
-                        {theme.label}
+                        {t(`theme.${theme.id}`)}
                       </button>
                     ),
                   )}
@@ -367,9 +424,7 @@ export default function SettingsPopover({
                   </span>
 
                   <span className="appearance-section-meta">
-                    {
-                      currentAppIcon.label
-                    }
+                    {t(`icon.${currentAppIcon.id}`)}
                   </span>
                 </div>
 
@@ -378,17 +433,13 @@ export default function SettingsPopover({
                     src={
                       currentAppIcon.src
                     }
-                    alt={
-                      currentAppIcon.label
-                    }
+                    alt={t(`icon.${currentAppIcon.id}`)}
                     className="appearance-icon-current-image"
                   />
 
                   <div className="appearance-icon-current-copy">
                     <strong>
-                      {
-                        currentAppIcon.label
-                      }
+                      {t(`icon.${currentAppIcon.id}`)}
                     </strong>
 
                     <span>
@@ -419,19 +470,49 @@ export default function SettingsPopover({
                       >
                         <img
                           src={icon.src}
-                          alt={
-                            icon.label
-                          }
+                          alt={t(`icon.${icon.id}`)}
                           className="appearance-icon-image"
                         />
 
-                        <span>
-                          {icon.label}
-                        </span>
+                        <span>{t(`icon.${icon.id}`)}</span>
                       </button>
                     ),
                   )}
                 </div>
+              </section>
+            </div>
+          ) : activeSettingsSection === "system-settings" ? (
+            <div className="settings-panel">
+              <section className="settings-section-card">
+                <label className="settings-toggle-row">
+                  <span><strong>{t("system.autoLogout")}</strong><small>{t("system.autoLogoutMeta")}</small></span>
+                  <input type="checkbox" checked={autoLogoutEnabled} onChange={(event) => onAutoLogoutEnabledChange(event.target.checked)} />
+                </label>
+                <label className="settings-field">
+                  <span>{t("system.autoLogoutHours")}</span>
+                  <input className="settings-input" type="number" min={1} max={24} step={1} value={hoursInput} disabled={!autoLogoutEnabled}
+                    onChange={(event) => setHoursInput(event.target.value)} onBlur={commitHours}
+                    onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commitHours(); } }} />
+                </label>
+                {hoursError ? <div className="settings-form-error">{hoursError}</div> : null}
+              </section>
+
+              <section className="settings-section-card">
+                <strong>{t("system.passwordTitle")}</strong>
+                <form className="settings-password-form" onSubmit={(event) => void submitPassword(event)}>
+                  <label className="settings-field"><span>{t("system.passwordCurrent")}</span><input className="settings-input" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+                  <label className="settings-field"><span>{t("system.passwordNew")}</span><input className="settings-input" type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+                  <label className="settings-field"><span>{t("system.passwordRepeat")}</span><input className="settings-input" type="password" autoComplete="new-password" value={repeatPassword} onChange={(event) => setRepeatPassword(event.target.value)} /></label>
+                  {passwordError ? <div className="settings-form-error">{passwordError}</div> : null}
+                  {passwordSaved ? <div className="settings-form-success">{t("system.passwordChanged")}</div> : null}
+                  <button type="submit" className="auth-button" disabled={passwordSaving}>{t("system.passwordChange")}</button>
+                </form>
+              </section>
+
+              <section className="settings-section-card">
+                <div className="settings-version-row"><strong>{t("system.version")}</strong><span>{APP_VERSION}</span></div>
+                <button type="button" className="auth-button auth-button-secondary" onClick={() => setUpdateChecked(true)}>{t("system.checkUpdates")}</button>
+                {updateChecked ? <div className="settings-form-success">{t("system.latestVersion")}</div> : null}
               </section>
             </div>
           ) : activeSettingsSection ===

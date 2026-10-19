@@ -596,14 +596,10 @@ fn resolve_server_addr(app: &AppHandle) -> Option<String> {
 #[cfg(target_os = "macos")]
 fn set_platform_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), String> {
     use objc2::{AllocAnyThread, MainThreadMarker};
-    use objc2_app_kit::{NSApplication, NSImage, NSWorkspace, NSWorkspaceIconCreationOptions};
-    use objc2_foundation::{NSData, NSString};
-    use std::{
-        sync::mpsc,
-        time::{Duration, SystemTime},
-    };
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    use std::{sync::mpsc, time::Duration};
 
-    let bundle_path = current_app_bundle_path();
     let (tx, rx) = mpsc::channel();
     app.run_on_main_thread(move || {
         let result = || {
@@ -616,29 +612,6 @@ fn set_platform_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), Stri
             };
 
             unsafe { app.setApplicationIconImage(Some(&image)) };
-
-            if let Some(bundle_path) = bundle_path {
-                let workspace = NSWorkspace::sharedWorkspace();
-                let path = NSString::from_str(&bundle_path.to_string_lossy());
-                let applied = workspace.setIcon_forFile_options(
-                    Some(&image),
-                    &path,
-                    NSWorkspaceIconCreationOptions::empty(),
-                );
-                if !applied {
-                    return Err(format!(
-                        "failed to apply selected icon to app bundle {}",
-                        bundle_path.display()
-                    ));
-                }
-
-                let now = SystemTime::now();
-                let _ = std::fs::File::options()
-                    .append(true)
-                    .open(&bundle_path)
-                    .and_then(|file| file.set_modified(now));
-                workspace.noteFileSystemChanged_(&path);
-            }
 
             Ok(())
         };
@@ -653,23 +626,6 @@ fn set_platform_app_icon(app: AppHandle, icon_bytes: Vec<u8>) -> Result<(), Stri
 #[cfg(not(target_os = "macos"))]
 fn set_platform_app_icon(_app: AppHandle, _icon_bytes: Vec<u8>) -> Result<(), String> {
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn current_app_bundle_path() -> Option<PathBuf> {
-    let exe_path = std::env::current_exe().ok()?;
-    let macos_dir = exe_path.parent()?;
-    let contents_dir = macos_dir.parent()?;
-    let app_dir = contents_dir.parent()?;
-
-    if macos_dir.file_name()? == "MacOS"
-        && contents_dir.file_name()? == "Contents"
-        && app_dir.extension()? == "app"
-    {
-        Some(app_dir.to_path_buf())
-    } else {
-        None
-    }
 }
 
 fn repo_root() -> PathBuf {
